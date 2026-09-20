@@ -1,0 +1,5 @@
+#!/bin/sh
+# Convenience wrapper for the lrc bridge CLI.
+# Usage:  ./lrc ping     (instead of: python3 bridge/lrc.py ping)
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec python3 "$DIR/bridge/lrc.py" "$@"

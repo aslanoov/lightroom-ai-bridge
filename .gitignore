@@ -1,0 +1,49 @@
+# --- macOS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# --- Bridge runtime state ---
+# The daemon stores its socket/port files in ~/.claude-lrc-bridge (outside the
+# repo); ignore any stray local copy too.
+.claude-lrc-bridge/
+
+# --- Adobe Lightroom Classic SDK + guides (third-party, NOT redistributable) ---
+# Kept locally for reference only. The README notes the SDK is "not required at
+# runtime"; download it yourself from Adobe rather than committing it here.
+LrC_*_SDK/
+LrC_*_SDK.zip
+Lightroom *Guide*.pdf
+
+# --- Editor / misc ---
+*.swp
+*~
+
+# --- Your reference material (knowledge/ inbox) ---
+# Drops are your own material: often large, often copyrighted. Structure and
+# the README are tracked; contents are not.
+knowledge/*
+!knowledge/README.md
+!knowledge/processed/
+knowledge/processed/*
+!knowledge/processed/.gitkeep
+
+# --- Your knowledge base ---
+# kb/ ships EMPTY and fills up with YOUR taste as you work. It is tracked by
+# default so your cards are versioned with the tool. If you plan to push this
+# fork to a PUBLIC remote, uncomment the next three lines to keep your cards
+# (and especially styles/user-taste.md) off the internet.
+# kb/**/*.md
+# !kb/README.md
+# !kb/learned/TEMPLATE.md

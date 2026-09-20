@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lightroom-bridge"
+dynamic = ["version"]
+description = "Drive Adobe Lightroom Classic's Develop module from a CLI or an MCP server."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mustafa Aslanov" }]
+keywords = ["lightroom", "adobe", "mcp", "model-context-protocol", "photography", "raw"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics",
+]
+# The MCP server requires fastmcp (Python 3.10+). The `lrc` CLI itself is pure
+# stdlib and also runs from a source checkout on the stock macOS Python 3.9.
+# Cap below the next untested fastmcp major: uvx re-resolves on every run, so
+# an uncapped range would pick up breaking majors overnight. Verified on 3.x.
+dependencies = ["fastmcp>=2.11,<4"]
+
+[project.scripts]
+lrc = "lightroom_bridge.cli:main"
+lightroom-bridge = "lightroom_bridge.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/aslanoov/lightroom-ai-bridge"
+Repository = "https://github.com/aslanoov/lightroom-ai-bridge"
+Issues = "https://github.com/aslanoov/lightroom-ai-bridge/issues"
+
+[tool.hatch.version]
+path = "src/lightroom_bridge/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lightroom_bridge"]
+
+# Bundle the Lightroom plug-in as package data so `lrc install-plugin` works
+# from a pip/uvx install, not only from a source checkout.
+[tool.hatch.build.targets.wheel.force-include]
+"ClaudeBridge.lrplugin" = "lightroom_bridge/data/ClaudeBridge.lrplugin"
+
+[tool.hatch.build.targets.sdist]
+# Patterns are anchored: unanchored "README.md" would also match kb/README.md.
+include = ["/src/lightroom_bridge", "/ClaudeBridge.lrplugin", "/README.md",
+           "/LICENSE", "/server.json"]
