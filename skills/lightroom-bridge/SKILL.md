@@ -17,7 +17,7 @@ description: >-
   advice.
 ---
 
-# Lightroom Classic editing via the Claude Bridge
+# Lightroom Classic editing via Lightroom AI Bridge
 
 This skill lets you edit and review the user's photos in a **real, running Adobe
 Lightroom Classic** on this Mac. A plug-in ("Claude Bridge") exposes the Develop
@@ -35,7 +35,7 @@ If that prints nothing, the user has a source checkout. Find it and use its
 wrapper:
 
 ```bash
-LRB="${LIGHTROOM_BRIDGE_HOME:-$HOME/lightroom-bridge}"   # ask the user if this misses
+LRB="${LIGHTROOM_BRIDGE_HOME:-$HOME/lightroom-ai-bridge}"   # ask the user if this misses
 "$LRB/lrc" <command>
 ```
 

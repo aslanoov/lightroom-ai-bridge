@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "lightroom-bridge"
 dynamic = ["version"]
-description = "Drive Adobe Lightroom Classic's Develop module from a CLI or an MCP server."
+description = "Lightroom AI Bridge: let an AI agent drive Adobe Lightroom Classic's Develop module, from a CLI or an MCP server."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Mustafa Aslanov" }]
 keywords = ["lightroom", "adobe", "mcp", "model-context-protocol", "photography", "raw"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",

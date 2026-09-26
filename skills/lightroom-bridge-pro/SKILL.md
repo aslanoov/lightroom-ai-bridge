@@ -41,7 +41,7 @@ distilled from how working pros describe their own craft:
 ## Ground rules (non-negotiable)
 
 - Base tooling: everything from the `lightroom-bridge` skill. Resolve the CLI
-  once (`command -v lrc`, else `LRB="${LIGHTROOM_BRIDGE_HOME:-$HOME/lightroom-bridge}"`
+  once (`command -v lrc`, else `LRB="${LIGHTROOM_BRIDGE_HOME:-$HOME/lightroom-ai-bridge}"`
   and `"$LRB/lrc"`), then use `--raw` for parseable output.
 - Read the repo's `CLAUDE.md` before editing, especially the races: `applied`/`ok`
   is never commit confirmation. Verify writes by read-back after a ~3s settle,

@@ -1,4 +1,4 @@
-# User guide
+# Lightroom AI Bridge user guide
 
 From "I have Lightroom and nothing else" to a finished edit, in order.
 
@@ -21,6 +21,7 @@ If you already installed the plug-in and just want the commands, go to
 12. [Troubleshooting](#troubleshooting)
 13. [FAQ](#11-faq)
 14. [Uninstall](#12-uninstall)
+15. [Get help](#13-get-help)
 
 ---
 
@@ -63,12 +64,19 @@ day one. The second one fixes itself, see section 10.
 Get the repo:
 
 ```bash
-git clone https://github.com/aslanoov/lightroom-ai-bridge.git ~/lightroom-bridge
-cd ~/lightroom-bridge
+git clone https://github.com/aslanoov/lightroom-ai-bridge.git ~/lightroom-ai-bridge
+cd ~/lightroom-ai-bridge
 ```
 
-`~/lightroom-bridge` is the default path the skills look for. Anywhere else
+No git? Download the source zip of the latest release from the
+[Releases page](https://github.com/aslanoov/lightroom-ai-bridge/releases/latest),
+unzip it, and rename the folder to `~/lightroom-ai-bridge`.
+
+`~/lightroom-ai-bridge` is the default path the skills look for. Anywhere else
 works, you just tell them where (section 5).
+
+> Inside Lightroom, the plug-in appears as **Claude Bridge**. That is this
+> project's plug-in; the menus below use that name.
 
 ---
 
@@ -116,14 +124,14 @@ launch.
 **From the checkout, nothing to install:**
 
 ```bash
-cd ~/lightroom-bridge
+cd ~/lightroom-ai-bridge
 ./lrc ping
 ```
 
 **Or put `lrc` on your PATH:**
 
 ```bash
-pip install -e ~/lightroom-bridge      # editable: git pull keeps it current
+pip install -e ~/lightroom-ai-bridge      # editable: git pull keeps it current
 lrc ping
 ```
 
@@ -151,7 +159,7 @@ connection open, so later calls are instant. It stops when you log out, or with
 ### Claude Code with the skills (recommended)
 
 ```bash
-cd ~/lightroom-bridge
+cd ~/lightroom-ai-bridge
 ./skills/install.sh
 ```
 
@@ -160,7 +168,7 @@ This symlinks `lightroom-bridge` and `lightroom-bridge-pro` into
 rather have independent copies, or `--project /path/to/project` to install them
 into one project only.
 
-If your checkout is **not** at `~/lightroom-bridge` and you did not `pip
+If your checkout is **not** at `~/lightroom-ai-bridge` and you did not `pip
 install`, tell the skills where it is:
 
 ```bash
@@ -182,7 +190,7 @@ tools, with before/after previews returned as inline images. Claude Desktop:
   "mcpServers": {
     "lightroom": {
       "command": "uv",
-      "args": ["run", "--directory", "/Users/you/lightroom-bridge", "lightroom-bridge"]
+      "args": ["run", "--directory", "/Users/you/lightroom-ai-bridge", "lightroom-bridge"]
     }
   }
 }
@@ -191,7 +199,7 @@ tools, with before/after previews returned as inline images. Claude Desktop:
 Claude Code:
 
 ```bash
-claude mcp add lightroom -- uv run --directory ~/lightroom-bridge lightroom-bridge
+claude mcp add lightroom -- uv run --directory ~/lightroom-ai-bridge lightroom-bridge
 ```
 
 Then ask the client to "ping Lightroom". Once the package is on PyPI, the
@@ -202,7 +210,7 @@ knowledge-base loop the skills use. It finds `kb/` next to the package in a
 source checkout; from a PyPI install, point it at one:
 
 ```bash
-export LIGHTROOM_BRIDGE_KB="$HOME/lightroom-bridge/kb"
+export LIGHTROOM_BRIDGE_KB="$HOME/lightroom-ai-bridge/kb"
 ```
 
 > The MCP server and the CLI share one daemon, so you can use both without them
@@ -532,3 +540,13 @@ need work.
 Your photos and catalog are unaffected. Edits Claude made stay in your History
 and can be reverted in Lightroom at any time. Keep the `kb/` folder even if you
 remove everything else: it is the only part that cannot be downloaded again.
+
+---
+
+## 13. Get help
+
+- Bugs and feature requests: open an
+  [issue on GitHub](https://github.com/aslanoov/lightroom-ai-bridge/issues).
+  Include the output of `./lrc ping --raw`, your Lightroom Classic version, and
+  the last lines of `~/.claude-lrc-bridge/daemon.log`.
+- Anything else: support@speranda.com

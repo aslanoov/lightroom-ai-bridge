@@ -9,7 +9,7 @@ The core is pure stdlib (Python 3.9+). The MCP server additionally needs
 ``fastmcp`` and a newer interpreter, so it is imported lazily, never here.
 """
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"
 
 # Re-export the stable seam for embedders. Importing _core is stdlib-only.
 from ._core import call, ensure_daemon, daemon_control  # noqa: E402,F401

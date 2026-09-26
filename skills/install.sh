@@ -45,7 +45,7 @@ cat <<NOTE
 Done. The skills look for the bridge in this order:
   1. an 'lrc' console script on PATH (pip / uvx install), then
   2. \$LIGHTROOM_BRIDGE_HOME, then
-  3. ~/lightroom-bridge
+  3. ~/lightroom-ai-bridge
 
 This checkout is at:
   $REPO

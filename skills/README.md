@@ -25,13 +25,13 @@ In this order:
 
 1. an `lrc` console script on `PATH` (you ran `pip install -e .` or `uvx`),
 2. the `LIGHTROOM_BRIDGE_HOME` environment variable,
-3. `~/lightroom-bridge`.
+3. `~/lightroom-ai-bridge`.
 
 If your checkout lives somewhere else and you did not install the package, add
 this to `~/.zshrc`:
 
 ```bash
-export LIGHTROOM_BRIDGE_HOME="/path/to/your/lightroom-bridge"
+export LIGHTROOM_BRIDGE_HOME="/path/to/your/lightroom-ai-bridge"
 ```
 
 ## Editing them

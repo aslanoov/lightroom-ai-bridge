@@ -1,4 +1,4 @@
-# Claude Bridge for Adobe Lightroom Classic
+# Lightroom AI Bridge
 
 Let Claude edit your photos in a **real, running Adobe Lightroom Classic**.
 
@@ -32,6 +32,9 @@ slider). No private APIs, no screen-scraping, localhost only.
 
 **New here? Read [docs/USER-GUIDE.md](docs/USER-GUIDE.md).** It walks from "I
 have Lightroom and nothing else" to a finished edit, in order, with what to type.
+
+> **One name to know:** inside Lightroom the plug-in appears as **Claude Bridge**
+> (in the Plug-in Manager and the Plug-in Extras menu). That is this project.
 
 ---
 
@@ -200,7 +203,8 @@ bridge/                  durable helper scripts (see docs/COMMAND-REFERENCE.md)
 skills/                  Claude Code skills + installer
 kb/                      knowledge base scaffold (empty; fills with your taste)
 knowledge/               inbox for raw reference material you want ingested
-docs/                    user guide and command reference
+docs/                    user guide, command reference, release runbook
+scripts/                 release_check.py, the pre-release gate
 CLAUDE.md / AGENTS.md    the operating cheat-sheet an agent reads (Claude / other agents)
 ```
 
@@ -276,9 +280,18 @@ intermittent for the active photo in Develop and silently falls back to
 so masks are verified by rendering. The full list of verified quirks lives in
 [CLAUDE.md](CLAUDE.md), which is also what an agent reads before it starts.
 
+## Get help
+
+Open an [issue on GitHub](https://github.com/aslanoov/lightroom-ai-bridge/issues),
+or email support@speranda.com. Release history: [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 [MIT](LICENSE) (c) 2026 Mustafa Aslanov.
+
+Adobe, Lightroom and Lightroom Classic are trademarks of Adobe Inc. Claude is a
+trademark of Anthropic. Lightroom AI Bridge is an independent project and is not
+affiliated with, sponsored by, or endorsed by Adobe or Anthropic.
 
 This project bundles no Adobe code. Adobe's Lightroom Classic SDK and its
 documentation are Adobe's property and are **not** included in this repository.
