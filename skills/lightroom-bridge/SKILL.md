@@ -58,10 +58,11 @@ lrc ping
 - a photo (or photos) **selected** in Lightroom.
 
 The first call auto-starts a small background daemon, nothing to launch by hand.
-If `ping` says *"Lightroom not reachable"*, tell the user to open Lightroom and
-make sure the plug-in is enabled and started (File > Plug-in Extras > *Claude
-Bridge: Show Status* / *Start*). Do not try to "fix" it from the shell, it is a
-UI step.
+If `ping` fails, relay the error's `diagnosis.hint`: it says whether Lightroom
+is closed, the plug-in is stopped, too old, busy or stuck, or another program
+holds the ports. Usually the fix is to open Lightroom and make sure the plug-in
+is enabled and started (File > Plug-in Extras > *Claude Bridge: Show Status* /
+*Start*). Do not try to "fix" it from the shell, it is a UI step.
 
 ## Golden rule: look -> edit -> look
 

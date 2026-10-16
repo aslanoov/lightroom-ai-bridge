@@ -27,6 +27,10 @@ classifiers = [
 # an uncapped range would pick up breaking majors overnight. Verified on 3.x.
 dependencies = ["fastmcp>=2.11,<4"]
 
+[project.optional-dependencies]
+# Lua 5.1 runtime for the plug-in protocol tests (tests/).
+test = ["lupa>=2.0,<3"]
+
 [project.scripts]
 lrc = "lightroom_bridge.cli:main"
 lightroom-bridge = "lightroom_bridge.mcp_server:main"
@@ -50,4 +54,4 @@ packages = ["src/lightroom_bridge"]
 [tool.hatch.build.targets.sdist]
 # Patterns are anchored: unanchored "README.md" would also match kb/README.md.
 include = ["/src/lightroom_bridge", "/ClaudeBridge.lrplugin", "/README.md",
-           "/LICENSE", "/server.json"]
+           "/LICENSE", "/server.json", "/tests"]

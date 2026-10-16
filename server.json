@@ -3,7 +3,7 @@
   "name": "io.github.aslanoov/lightroom-ai-bridge",
   "description": "Drive Adobe Lightroom Classic's Develop module (tone, colour, crop, AI masks, ratings, before/after previews) from Claude or any MCP client. macOS only; requires Lightroom Classic with the Lightroom AI Bridge plug-in (shown in Lightroom as Claude Bridge).",
   "status": "active",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "repository": {
     "url": "https://github.com/aslanoov/lightroom-ai-bridge",
     "source": "github"
@@ -13,7 +13,7 @@
       "registry_type": "pypi",
       "registry_base_url": "https://pypi.org",
       "identifier": "lightroom-bridge",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "transport": {
         "type": "stdio"
       }

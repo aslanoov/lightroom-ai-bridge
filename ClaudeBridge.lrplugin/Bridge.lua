@@ -6,11 +6,13 @@ Opens two local TCP sockets:
   * RECV_PORT  (mode "receive") : the external bridge sends command lines here.
   * SEND_PORT  (mode "send")    : this plug-in sends JSON responses back here.
 
-Wire protocol
-  Inbound  (bridge -> Lightroom) : one Lua table literal per line, e.g.
-       {id=7,cmd="set",params={Exposure=0.5,Contrast=12}}
-     It is parsed with loadstring in an empty sandbox environment (it can only
-     build a data table, never call code).
+Wire protocol (json-1)
+  Inbound  (bridge -> Lightroom) : one JSON object per line, e.g.
+       {"id":7,"cmd":"set","params":{"Exposure":0.5},"token":"<hex>"}
+     It is decoded by a strict JSON parser (data only: nothing in a command
+     line is ever evaluated as code). "token" must match the secret this
+     instance wrote to ~/.claude-lrc-bridge/auth.token, so only a process that
+     can read the user's private bridge folder can drive Lightroom.
   Outbound (Lightroom -> bridge) : one JSON object per line, e.g.
        {"id":7,"ok":true,"result":{"applied":{"Exposure":0.5}}}
 
@@ -46,6 +48,9 @@ local PREVIEW_DIR = LrPathUtils.child(BRIDGE_DIR, 'previews')
 local HANDSHAKE   = LrPathUtils.child(BRIDGE_DIR, 'bridge.json')
 local LOG_PATH    = LrPathUtils.child(BRIDGE_DIR, 'bridge.log')
 local GEN_PATH    = LrPathUtils.child(BRIDGE_DIR, 'instance.gen')
+local AUTH_PATH   = LrPathUtils.child(BRIDGE_DIR, 'auth.token')
+local PROTOCOL    = 'json-1'
+local LOG_MAX_BYTES = 5 * 1024 * 1024
 
 local PLUGIN_VERSION = '1.1.0'
 
@@ -119,6 +124,150 @@ jsonEncode = function(v)
 end
 
 --==============================================================================
+-- Strict JSON decoder (Lua 5.1) for INBOUND command lines. It only builds
+-- data: unlike the loadstring parser it replaced (Lightroom's plug-in sandbox
+-- has no setfenv, so that "sandbox" could evaluate any expression), no input
+-- can call a function. JSON null decodes to nil, i.e. an absent key -- the
+-- same meaning a missing parameter always had.
+--==============================================================================
+
+local jsonDecode
+do
+	local MAX_DEPTH = 64
+	local ESCAPES = { ['"'] = '"', ['\\'] = '\\', ['/'] = '/', b = '\b',
+		f = '\f', n = '\n', r = '\r', t = '\t' }
+
+	local function utf8(cp)
+		if cp < 0x80 then return string.char(cp) end
+		if cp < 0x800 then
+			return string.char(0xC0 + math.floor(cp / 0x40), 0x80 + cp % 0x40)
+		end
+		if cp < 0x10000 then
+			return string.char(0xE0 + math.floor(cp / 0x1000),
+				0x80 + math.floor(cp / 0x40) % 0x40, 0x80 + cp % 0x40)
+		end
+		return string.char(0xF0 + math.floor(cp / 0x40000),
+			0x80 + math.floor(cp / 0x1000) % 0x40,
+			0x80 + math.floor(cp / 0x40) % 0x40, 0x80 + cp % 0x40)
+	end
+
+	local function skip(s, i)
+		local _, e = string.find(s, '^[ \t\r\n]*', i)
+		return e + 1
+	end
+
+	local function parseString(s, i)
+		local out, j = {}, i + 1
+		while true do
+			local a, b = string.find(s, '^[^"\\%z\1-\31]+', j)
+			if a then out[#out + 1] = string.sub(s, a, b); j = b + 1 end
+			local c = string.sub(s, j, j)
+			if c == '"' then return table.concat(out), j + 1 end
+			if c ~= '\\' then
+				error(c == '' and 'unterminated string' or 'control character in string', 0)
+			end
+			local e = string.sub(s, j + 1, j + 1)
+			if e == 'u' then
+				local hex = string.match(s, '^%x%x%x%x', j + 2)
+				if not hex then error('bad \\u escape', 0) end
+				local cp = tonumber(hex, 16)
+				j = j + 6
+				if cp >= 0xD800 and cp <= 0xDBFF then
+					local low = string.match(s, '^\\u(%x%x%x%x)', j)
+					local lcp = low and tonumber(low, 16)
+					if not lcp or lcp < 0xDC00 or lcp > 0xDFFF then error('bad surrogate pair', 0) end
+					cp = 0x10000 + (cp - 0xD800) * 0x400 + (lcp - 0xDC00)
+					j = j + 6
+				elseif cp >= 0xDC00 and cp <= 0xDFFF then
+					error('bad surrogate pair', 0)
+				end
+				out[#out + 1] = utf8(cp)
+			else
+				local r = ESCAPES[e]
+				if not r then error('bad escape', 0) end
+				out[#out + 1] = r
+				j = j + 2
+			end
+		end
+	end
+
+	local function parseNumber(s, i)
+		local j = i
+		if string.sub(s, j, j) == '-' then j = j + 1 end
+		local a, b = string.find(s, '^%d+', j)
+		if not a or (b > a and string.sub(s, a, a) == '0') then error('bad number', 0) end
+		j = b + 1
+		if string.sub(s, j, j) == '.' then
+			a, b = string.find(s, '^%d+', j + 1)
+			if not a then error('bad number', 0) end
+			j = b + 1
+		end
+		if string.find(s, '^[eE]', j) then
+			a, b = string.find(s, '^[-+]?%d+', j + 1)
+			if not a then error('bad number', 0) end
+			j = b + 1
+		end
+		local n = tonumber(string.sub(s, i, j - 1))
+		if not n or n ~= n or n == math.huge or n == -math.huge then error('bad number', 0) end
+		return n, j
+	end
+
+	local parseValue
+	parseValue = function(s, i, depth)
+		i = skip(s, i)
+		local c = string.sub(s, i, i)
+		if c == '{' or c == '[' then
+			if depth >= MAX_DEPTH then error('nesting too deep', 0) end
+			local t, n, close = {}, 0, (c == '{') and '}' or ']'
+			i = skip(s, i + 1)
+			if string.sub(s, i, i) == close then return t, i + 1 end
+			while true do
+				if close == '}' then
+					if string.sub(s, i, i) ~= '"' then error('expected object key', 0) end
+					local k
+					k, i = parseString(s, i)
+					i = skip(s, i)
+					if string.sub(s, i, i) ~= ':' then error("expected ':'", 0) end
+					local v
+					v, i = parseValue(s, i + 1, depth + 1)
+					t[k] = v
+				else
+					n = n + 1
+					local v
+					v, i = parseValue(s, i, depth + 1)
+					t[n] = v
+				end
+				i = skip(s, i)
+				local d = string.sub(s, i, i)
+				if d == close then return t, i + 1 end
+				if d ~= ',' then error("expected ',' or '" .. close .. "'", 0) end
+				i = skip(s, i + 1)
+			end
+		elseif c == '"' then
+			return parseString(s, i)
+		elseif c == '-' or string.find(c, '^%d') then
+			return parseNumber(s, i)
+		elseif string.sub(s, i, i + 3) == 'true' then
+			return true, i + 4
+		elseif string.sub(s, i, i + 4) == 'false' then
+			return false, i + 5
+		elseif string.sub(s, i, i + 3) == 'null' then
+			return nil, i + 4
+		end
+		error(c == '' and 'unexpected end of input' or 'unexpected character', 0)
+	end
+
+	-- Returns value, nil on success (value may be nil for "null") or nil, err.
+	jsonDecode = function(s)
+		if type(s) ~= 'string' then return nil, 'not a string' end
+		local ok, v, i = pcall(parseValue, s, 1, 0)
+		if not ok then return nil, tostring(v) end
+		if skip(s, i) <= #s then return nil, 'trailing characters' end
+		return v, nil
+	end
+end
+
+--==============================================================================
 -- Small file / log / handshake helpers
 --==============================================================================
 
@@ -138,6 +287,50 @@ local function log(msg)
 			f:close()
 		end
 	end)
+end
+
+-- Keep one previous generation (bridge.log.1). Call from a task via
+-- LrTasks.pcall: the file APIs may yield.
+local function rotateLog()
+	local attrs = LrFileUtils.fileAttributes(LOG_PATH)
+	if attrs and (tonumber(attrs.fileSize) or 0) > LOG_MAX_BYTES then
+		local old = LOG_PATH .. '.1'
+		if LrFileUtils.exists(old) then LrFileUtils.delete(old) end
+		LrFileUtils.move(LOG_PATH, old)
+	end
+end
+
+local function clip(s, n)
+	if #s <= n then return s end
+	return string.sub(s, 1, n) .. string.format('...(%d bytes)', #s)
+end
+
+local function shellQuote(s)
+	return "'" .. string.gsub(s, "'", "'\\''") .. "'"
+end
+
+-- Per-instance shared secret. 32 bytes from the OS CSPRNG; no fallback, since
+-- a guessable token would only pretend to protect the ports.
+local function newAuthToken()
+	local f = io.open('/dev/urandom', 'rb')
+	if not f then return nil end
+	local bytes = f:read(32)
+	f:close()
+	if type(bytes) ~= 'string' or #bytes ~= 32 then return nil end
+	return (string.gsub(bytes, '.', function(c) return string.format('%02x', string.byte(c)) end))
+end
+
+-- The SDK has no chmod, so use its shell escape (LrTasks.execute, task-only).
+-- The folder is made private BEFORE the secret lands in it; the lrc daemon
+-- enforces the same 0700 from its side.
+local function writeAuthToken(token)
+	LrTasks.execute('/bin/chmod 700 ' .. shellQuote(BRIDGE_DIR))
+	local f = io.open(AUTH_PATH, 'w')
+	if not f then return false end
+	f:write(token)
+	f:close()
+	LrTasks.execute('/bin/chmod 600 ' .. shellQuote(AUTH_PATH))
+	return true
 end
 
 -- Cross-environment instance handoff. "Reload Plug-in" gives the new instance
@@ -185,6 +378,7 @@ local function writeHandshake(status, token)
 			f:write(jsonEncode {
 				recvPort   = RECV_PORT,
 				sendPort   = SEND_PORT,
+				protocol   = PROTOCOL,
 				status     = status,
 				gen        = token,
 				lightroom  = LrApplication.versionString(),
@@ -331,6 +525,7 @@ function H.ping(p)
 	return {
 		plugin    = 'Claude Bridge',
 		version   = PLUGIN_VERSION,
+		protocol  = PROTOCOL,
 		lightroom = LrApplication.versionString(),
 		module    = LrApplicationView.getCurrentModuleName(),
 		catalog   = cat:getPath(),
@@ -1034,23 +1229,43 @@ end
 -- Inbound parsing + dispatch
 --==============================================================================
 
+-- Secret of the serving instance; nil until runServer has written it, so a
+-- command can never be accepted before the token file exists.
+local AUTH_TOKEN = nil
+
+local STALE_CLIENT_HINT = ' (an out-of-date lrc daemon? Run `lrc daemon stop`; the next command restarts it)'
+
 local function parseLine(line)
-	local chunk, err = loadstring('return ' .. line)
-	if not chunk then return nil, 'parse error: ' .. tostring(err) end
-	-- Sandbox the chunk into an empty environment when the host Lua exposes
-	-- setfenv (it does in stock 5.1, but Lightroom's plug-in sandbox omits it).
-	-- The command source is our own localhost bridge, so this is defense-in-depth.
-	if setfenv then pcall(setfenv, chunk, {}) end
-	local ok, val = pcall(chunk)
-	if not ok then return nil, 'eval error: ' .. tostring(val) end
-	if type(val) ~= 'table' then return nil, 'command is not a table' end
+	local val, err = jsonDecode(line)
+	if err then return nil, 'parse error: ' .. err .. '; expected one JSON object per line' .. STALE_CLIENT_HINT end
+	if type(val) ~= 'table' then return nil, 'command is not a JSON object' end
 	return val
 end
 
+local function tokenOk(token)
+	if type(token) ~= 'string' or type(AUTH_TOKEN) ~= 'string' or #token ~= #AUTH_TOKEN then
+		return false
+	end
+	local same = true
+	for i = 1, #token do
+		if string.byte(token, i) ~= string.byte(AUTH_TOKEN, i) then same = false end
+	end
+	return same
+end
+
 local function dispatch(obj)
+	-- Authenticate before anything else: an unauthenticated line must not
+	-- even learn which commands exist.
+	if not tokenOk(obj.token) then
+		return { id = obj.id, ok = false, errorCode = 'unauthorized',
+			error = 'unauthorized: missing or stale bridge token' .. STALE_CLIENT_HINT }
+	end
 	local handler = H[obj.cmd]
 	if not handler then
 		return { id = obj.id, ok = false, error = 'unknown command: ' .. tostring(obj.cmd) }
+	end
+	if obj.params ~= nil and type(obj.params) ~= 'table' then
+		return { id = obj.id, ok = false, error = 'params must be a JSON object' }
 	end
 	-- LrTasks.pcall is a yield-safe pcall: handlers may yield (sleep, module
 	-- switch, withWriteAccessDo, export) which a plain pcall would forbid.
@@ -1066,8 +1281,14 @@ local function handleLine(line)
 	if line == '' then return nil end
 	local obj, perr = parseLine(line)
 	if not obj then
-		return jsonEncode { ok = false, error = perr }
+		log('rejected line: ' .. perr)
+		return jsonEncode { ok = false, errorCode = 'parse', error = perr }
 	end
+	-- Log the command, never the token; clip huge params (geometry_apply
+	-- carries a whole Develop state) so the log stays readable and small.
+	local okParams, params = pcall(jsonEncode, obj.params or {})
+	log(string.format('cmd: %s id=%s %s', tostring(obj.cmd), tostring(obj.id),
+		clip(okParams and params or '?', 300)))
 	return jsonEncode(dispatch(obj))
 end
 
@@ -1117,6 +1338,7 @@ local function runServer()
 		LrFunctionContext.callWithContext('claude_bridge', function(context)
 			LrFileUtils.createAllDirectories(BRIDGE_DIR)
 			LrFileUtils.createAllDirectories(PREVIEW_DIR)
+			LrTasks.pcall(rotateLog)
 
 			local queue = {}
 			local receiver, sender
@@ -1151,6 +1373,77 @@ local function runServer()
 				end
 			end
 
+			-- Client pairing. A client opens the receive (command) port and the
+			-- send (response) port, in either order. The send listener is the
+			-- fragile half:
+			-- after a client leaves, reconnect() does not make a 'send'
+			-- listener accept the next one, and its onClosed may never fire
+			-- (live-confirmed 2026-10-10: a second client logged 'receiver
+			-- connected' but never 'sender connected', so every reply was
+			-- silently dropped until the plug-in was restarted). Recovery is a
+			-- full close + bind; a generation number makes a closed listener's
+			-- late callbacks inert so they cannot trigger another rebind.
+			local senderGen, senderFailures = 0, 0
+			local senderNeedsRebind, lastRebind = false, 0
+			-- lastSenderAt: an UNCONSUMED response connection (each pairs once).
+			-- pendingReceiverAt: a command client still waiting for its pair.
+			-- receiverOrphaned: the current command client has no response
+			-- channel; its lines are dropped until it reconnects.
+			-- staleLines: queued lines of a command client that has left.
+			local lastSenderAt, pendingReceiverAt = nil, nil
+			local receiverOrphaned, staleLines = false, 0
+
+			local function bindSender(gen)
+				local function live() return gen == senderGen and stillLive() end
+				sender = LrSocket.bind {
+					functionContext = context,
+					plugin  = _PLUGIN,
+					address = 'localhost',
+					port    = SEND_PORT,
+					mode    = 'send',
+					onConnected = function()
+						if not live() then return end
+						lastSenderAt = LrDate.currentTime()
+						senderFailures = 0
+						log('sender connected')
+					end,
+					onClosed = function()
+						if not live() then return end
+						log('sender closed')
+						senderNeedsRebind = true
+					end,
+					onError = function(socket, err)
+						if not live() then return end
+						if err == 'timeout' then
+							rearm(socket)  -- listen-side idle timeout: reconnect suffices
+						elseif startupPhase then
+							bindFailed = true
+							log('sender bind failed (' .. tostring(err) .. '); will retry')
+						else
+							senderFailures = senderFailures + 1
+							log('sender error: ' .. tostring(err))
+							if senderFailures >= 5 then
+								log('sender failing repeatedly; stopping')
+								fatal = true
+								_G.LRC_RUNNING = false
+							else
+								senderNeedsRebind = true
+							end
+						end
+					end,
+				}
+			end
+
+			local function rebindSender(reason)
+				senderGen = senderGen + 1  -- first: the old listener's callbacks go inert
+				pcall(function() sender:close() end)
+				LrTasks.sleep(0.1)
+				bindSender(senderGen)
+				senderNeedsRebind, lastSenderAt = false, nil
+				lastRebind = LrDate.currentTime()
+				log('send port rebound: ' .. reason)
+			end
+
 			local function bindSockets()
 				receiver = LrSocket.bind {
 					functionContext = context,
@@ -1158,7 +1451,11 @@ local function runServer()
 					address = 'localhost',
 					port    = RECV_PORT,
 					mode    = 'receive',
-					onConnected = function() log('receiver connected') end,
+					onConnected = function()
+						pendingReceiverAt = LrDate.currentTime()
+						receiverOrphaned = false
+						log('receiver connected')
+					end,
 					onMessage = function(socket, message)
 						-- LrSocket delivers newline-delimited messages with the
 						-- newline already consumed, so enqueue each line as-is.
@@ -1168,19 +1465,20 @@ local function runServer()
 							end
 						end
 					end,
-					onClosed = function(socket) rearm(socket) end,
+					onClosed = function(socket)
+						-- The client pair is gone: its response connection is
+						-- dead too, so give the next client a fresh send
+						-- listener, and never run lines nobody can be answered for.
+						log('receiver closed')
+						staleLines = #queue
+						pendingReceiverAt, receiverOrphaned = nil, false
+						senderNeedsRebind = true
+						rearm(socket)
+					end,
 					onError  = function(socket, err) onSockError('receiver', socket, err) end,
 				}
-				sender = LrSocket.bind {
-					functionContext = context,
-					plugin  = _PLUGIN,
-					address = 'localhost',
-					port    = SEND_PORT,
-					mode    = 'send',
-					onConnected = function() log('sender connected') end,
-					onClosed = function(socket) rearm(socket) end,
-					onError  = function(socket, err) onSockError('sender', socket, err) end,
-				}
+				senderGen = senderGen + 1
+				bindSender(senderGen)
 			end
 
 			-- Bind with retries: the previous instance may keep the ports for a
@@ -1203,6 +1501,10 @@ local function runServer()
 				LrTasks.sleep(1.4)
 			end
 			startupPhase = false
+			-- Closing a failed attempt's sockets may have fired close callbacks;
+			-- those flags describe no client, so they must not cause a rebind
+			-- that would kick a client connecting right now.
+			senderNeedsRebind, staleLines = false, 0
 			if not bound then
 				log('could not bind ports after retries; giving up')
 				_G.LRC_RUNNING = false
@@ -1210,12 +1512,36 @@ local function runServer()
 				return
 			end
 
+			-- Fresh secret per instance, written before 'running' is announced;
+			-- until AUTH_TOKEN is set every command is refused.
+			local secret = newAuthToken()
+			local wrote = false
+			if secret then
+				local ok, res = LrTasks.pcall(writeAuthToken, secret)
+				wrote = ok and res == true
+			end
+			if not wrote then
+				log('could not create ' .. AUTH_PATH .. '; refusing to serve unauthenticated')
+				pcall(function() sender:close() end)
+				pcall(function() receiver:close() end)
+				_G.LRC_RUNNING = false
+				_G.LRC_SHUTDOWN = true
+				LrDialogs.showBezel('Claude Bridge could not start (auth token)', 3)
+				return
+			end
+			AUTH_TOKEN = secret
+
 			CURRENT_TOKEN = myToken
 			writeHandshake('running', myToken)
 			log(string.format('Claude Bridge %s started (recv %d, send %d)', PLUGIN_VERSION, RECV_PORT, SEND_PORT))
 			LrDialogs.showBezel('Claude Bridge running', 2)
 
-			local lastGenCheck = 0
+			local function dropQueued(n, why)
+				for _ = 1, math.min(n, #queue) do table.remove(queue, 1) end
+				log(string.format('dropped %d line(s): %s', n, why))
+			end
+
+			local lastGenCheck, served = 0, 0
 			while _G.LRC_RUNNING and myGen == _G.LRC_GEN do
 				-- Stop when a newer instance (possibly in a fresh Lua
 				-- environment after "Reload Plug-in") has stamped the gen file.
@@ -1228,9 +1554,37 @@ local function runServer()
 						break
 					end
 				end
-				if #queue > 0 then
+				if staleLines > 0 then
+					dropQueued(staleLines, 'their command client left')
+					staleLines = 0
+				end
+				-- Pair a command client with one unconsumed response connection
+				-- made within a second of it, before or after (the lrc daemon
+				-- opens the command port first).
+				if lastSenderAt and (receiverOrphaned
+						or (pendingReceiverAt and lastSenderAt >= pendingReceiverAt - 1)) then
+					lastSenderAt, pendingReceiverAt, receiverOrphaned = nil, nil, false
+				end
+				if senderNeedsRebind then
+					if now - lastRebind > 1 then rebindSender('response client left') end
+					LrTasks.sleep(0.03)  -- hold commands until replies can be delivered
+				elseif pendingReceiverAt then
+					if now - pendingReceiverAt > 1 then
+						-- The send listener never accepted this client (it was
+						-- stale). Rebind so its reconnect finds a fresh one, and
+						-- drop what it sent: those replies cannot be delivered.
+						pendingReceiverAt, receiverOrphaned = nil, true
+						if #queue > 0 then dropQueued(#queue, 'command client has no response connection') end
+						rebindSender('command client had no response connection')
+					else
+						LrTasks.sleep(0.03)
+					end
+				elseif receiverOrphaned and #queue > 0 then
+					dropQueued(#queue, 'command client has no response connection')
+				elseif #queue > 0 then
 					local line = table.remove(queue, 1)
-					log('cmd: ' .. line)
+					served = served + 1
+					if served % 1000 == 0 then LrTasks.pcall(rotateLog) end
 					-- yield-safe: handleLine -> dispatch -> handler may yield
 					local ok, resp = LrTasks.pcall(handleLine, line)
 					local out = ok and resp or jsonEncode { ok = false, error = 'internal: ' .. tostring(resp) }

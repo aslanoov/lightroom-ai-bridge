@@ -38,6 +38,6 @@ return {
 		{ title = 'Claude Bridge: Stop', file = 'Stop.lua' },
 	},
 
-	VERSION = { major = 1, minor = 2, revision = 0, build = 1 },
+	VERSION = { major = 1, minor = 3, revision = 0, build = 1 },
 
 }

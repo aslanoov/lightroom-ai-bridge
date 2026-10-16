@@ -7,6 +7,55 @@ All notable changes to Lightroom AI Bridge are recorded here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-16
+
+A security and reliability release. **Upgrade both halves together:** reload
+the plug-in (Plug-in Manager, then Reload Plug-in, or restart Lightroom; it now
+shows plug-in version 1.3.0) and run `./lrc daemon stop` so the next command
+starts the new daemon. The wire protocol changed, so a 1.x plug-in and a 2.0
+CLI refuse each other with a message that says exactly this.
+
+### Security
+
+- Commands sent to the plug-in can no longer run code. Release 1.0.0 parsed
+  each command with `loadstring`; Lightroom's plug-in environment has no
+  `setfenv`, so the documented "empty sandbox" did not exist and any local
+  process that reached port 49463 could make Lightroom evaluate an expression.
+  Commands are now JSON, read by a strict data-only decoder.
+- Every command must carry a secret the plug-in generates each time it starts
+  (256 bits from `/dev/urandom`, stored in `~/.claude-lrc-bridge/auth.token`,
+  folder kept owner-only). Other local users, and software that cannot read
+  your files, such as a web page posting to `localhost:49463`, are refused
+  before anything runs.
+
+### Fixed
+
+- The bridge no longer goes silent after its first client disconnects.
+  Restarting the daemon, a crashed client or a second tool used to leave the
+  plug-in's response port unable to accept anyone else, so every later command
+  timed out until the plug-in was restarted. The plug-in now rebinds that port
+  when a client leaves, and drops commands whose replies could not be
+  delivered instead of running them unanswered. `./lrc daemon stop` is safe.
+- A busy or stuck plug-in now fails in about 5 to 12 seconds instead of 45 to
+  120: the daemon pings before trusting a fresh, idle or timed-out link,
+  reconnects once after giving the plug-in time to rebind, and never resends a
+  command that timed out.
+- With Lightroom closed, commands fail immediately instead of after 8 seconds,
+  while a plug-in reload in progress is still waited out.
+
+### Added
+
+- Errors carry a `diagnosis`: which process holds ports 49463/49464 (for
+  example another Lightroom controller), whether the plug-in is closed, too old,
+  busy or stuck, and the fix. `./lrc daemon status` reports it together with
+  the daemon version, protocol and link health.
+- Housekeeping: the daemon prunes `~/.claude-lrc-bridge/previews` (renders older
+  than 24 hours, and the oldest beyond 1 GB), and both logs rotate at 5 MB. The
+  plug-in logs a short summary per command instead of the whole command line.
+- Tests in `tests/` for the decoder, the token check, liveness probes,
+  reconnects, diagnosis and housekeeping, runnable without Lightroom
+  (`uv run --extra test python -m unittest discover -s tests`).
+
 ## [1.0.0] - 2026-09-26
 
 First public release.
@@ -48,5 +97,6 @@ First public release.
 - Mask values cannot be read back through the SDK; masks are verified by render.
 - Not yet published to PyPI; install from source (see the user guide).
 
-[Unreleased]: https://github.com/aslanoov/lightroom-ai-bridge/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/aslanoov/lightroom-ai-bridge/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/aslanoov/lightroom-ai-bridge/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/aslanoov/lightroom-ai-bridge/releases/tag/v1.0.0

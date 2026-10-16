@@ -445,8 +445,11 @@ part of this repo that decides whether session 50 is better than session 1.
 
 ## Troubleshooting
 
-**`Lightroom not reachable...`**
+**`Lightroom not reachable...` / `Lightroom is not responding...`**
 
+0. Read the `diagnosis.hint` in the error (or run `./lrc daemon status`). It
+   says whether Lightroom is closed, the plug-in is stopped, too old, busy or
+   stuck, or another program holds ports 49463/49464, and what to do.
 1. Is Lightroom Classic actually open? (Classic. Not Lightroom CC.)
 2. **File > Plug-in Extras > Claude Bridge: Show Status**. If "Run loop active"
    is *no*, pick **Claude Bridge: Start / Restart** in the same menu.
@@ -475,9 +478,16 @@ through the pipeline and always reflects the current state, including crop and
 masks. `thumb` reads the preview cache, which Lightroom often refuses for the
 active photo in Develop; the CLI falls back to `render` automatically.
 
-**The bridge wedges after Lightroom restarts or the plug-in reloads.** The
-plug-in serves one client at a time. Restart it from **Plug-in Extras > Claude
-Bridge: Start / Restart**, then `./lrc daemon stop && ./lrc ping`.
+**`predates protocol json-1`, `unauthorized` or `parse error ... lrc daemon
+stop`.** The plug-in and the CLI come from different releases. Since 2.0 both
+must be 2.0 or newer: reload the plug-in (Plug-in Manager, then Reload
+Plug-in, or restart Lightroom) and run `./lrc daemon stop`.
+
+**The bridge stops answering.** Before 2.0 the plug-in stopped replying to
+every client after the first one disconnected, until it was restarted. Plug-in
+1.3 (release 2.0) rebinds its response port when a client leaves, so
+`./lrc daemon stop` and restarts are safe. If it still happens, restart the
+plug-in from **Plug-in Extras > Claude Bridge: Start / Restart**.
 
 **Contact sheets fail.** `pip3 install --user Pillow`.
 

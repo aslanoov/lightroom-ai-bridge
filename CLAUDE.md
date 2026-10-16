@@ -76,9 +76,11 @@ Lightroom's preview pipeline often refuses it for the active photo in Develop;
 the CLI auto-falls back to `render`, so `thumb` still works, just slower on a
 miss. Prefer `render --out` in the loop.
 
-If `ping` fails: tell the user to open Lightroom and ensure the "Claude Bridge"
-plug-in is enabled (File > Plug-in Manager) and started (Plug-in Extras menu).
-It is a UI step; do not try to fix it from the shell.
+If `ping` fails: relay the error's `diagnosis.hint` (it says whether Lightroom
+is closed, the plug-in is stopped, too old, busy or stuck, or another program
+holds the ports). Usually the fix is to open Lightroom and ensure the "Claude
+Bridge" plug-in is enabled (File > Plug-in Manager) and started (Plug-in
+Extras menu). It is a UI step; do not try to fix it from the shell.
 
 ## Most-used commands
 

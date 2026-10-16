@@ -5,8 +5,9 @@ the bridge keeps its files. Run `./lrc <command> -h` for exact flags, or
 `./lrc help` to ask the *plug-in* which commands it supports.
 
 Global flags: `--raw` prints compact one-line JSON (good for parsing);
-`--direct` is accepted for compatibility and still routes through the daemon (a
-true one-shot bypass would wedge the single-client plug-in).
+`--direct` is accepted for compatibility and still routes through the daemon
+(the plug-in serves one client at a time, so every caller shares the daemon's
+connection).
 
 ## Inspect
 
@@ -215,22 +216,34 @@ Everything the bridge writes lives under `~/.claude-lrc-bridge/`:
 
 | File | Purpose |
 |---|---|
-| `bridge.json` | Handshake written by the plug-in (ports, Lightroom version, status). |
+| `bridge.json` | Handshake written by the plug-in (ports, protocol, Lightroom version, status). |
+| `auth.token` | Per-start secret the plug-in writes; every command must carry it. The folder is kept owner-only (0700). |
 | `previews/` | JPEGs from `thumb` and `render`, named per photo UUID. |
 | `cli.sock` | Unix socket between the `lrc` CLI and its daemon. |
 | `instance.gen` | Plug-in instance-handoff token: a reloaded plug-in stamps it and the old serving loop stops. |
 | `daemon.lock` | Daemon spawn lock, so two concurrent clients cannot both launch a daemon. |
-| `bridge.log` | Plug-in-side log (inside Lightroom). |
-| `daemon.log` | Daemon-side log (the Python bridge). |
+| `bridge.log` | Plug-in-side log (inside Lightroom); rotates at 5 MB to `bridge.log.1`. |
+| `daemon.log` | Daemon-side log (the Python bridge); rotates at 5 MB to `daemon.log.1`. |
 
-Ports: **49463** (commands) and **49464** (responses), localhost only.
+The daemon prunes `previews/` when it starts and at most hourly while in use:
+renders older than 24 hours go, then the oldest until the folder is under 1 GB.
+Nothing younger than 10 minutes and nothing but `.jpg` files is touched.
+
+Ports: **49463** (commands) and **49464** (responses), localhost only. Wire
+protocol `json-1`: one JSON object per line each way; every command carries the
+`auth.token` secret.
 
 ## Lightroom Lua environment gotchas (for plug-in maintainers)
 
 Documented in Adobe's *Programmers Guide* and confirmed live:
 
 - `setfenv()` is **not** available in the plug-in sandbox (Programmers Guide
-  p.18); the command parser guards for it.
+  p.18), so `loadstring` cannot be sandboxed: never use it on input. Commands
+  are decoded by a strict JSON parser instead.
+- A `send`-mode `LrSocket` does not accept a new client after `reconnect()`,
+  and its `onClosed` does not fire when a client leaves (only when Lightroom
+  quits). The plug-in therefore rebinds the response port (close, then bind
+  again) when the command client disconnects.
 - You **cannot yield across a plain `pcall`**. All SDK calls that yield (module
   switch, `sleep`, `withWriteAccessDo`, export) go through `LrTasks.pcall`.
 - `LrSocket` delivers newline-delimited messages with the newline already consumed.

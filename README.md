@@ -205,8 +205,13 @@ kb/                      knowledge base scaffold (empty; fills with your taste)
 knowledge/               inbox for raw reference material you want ingested
 docs/                    user guide, command reference, release runbook
 scripts/                 release_check.py, the pre-release gate
+tests/                   protocol and transport tests (no Lightroom needed)
 CLAUDE.md / AGENTS.md    the operating cheat-sheet an agent reads (Claude / other agents)
 ```
+
+Run the tests with `uv run --extra test python -m unittest discover -s tests`
+(they load the plug-in's Lua in a Lua 5.1 runtime and talk to a fake plug-in
+over real sockets; Lightroom is not needed).
 
 **Not included:** Adobe's Lightroom Classic SDK and its PDF guides. They are
 Adobe's material with redistribution restrictions, and they are not required at
@@ -216,10 +221,19 @@ runtime. Download them from Adobe only if you want to modify the plug-in's Lua.
 
 ## Troubleshooting
 
-**`Lightroom not reachable...`** Is Lightroom Classic open? In Lightroom:
+**`Lightroom not reachable...` / `Lightroom is not responding...`** Read the
+error's `diagnosis.hint` first: it names whoever holds ports 49463/49464 and
+says whether Lightroom is closed, or the plug-in is stopped, too old, busy (a
+long export or an open dialog) or stuck, and what to do. `./lrc daemon status`
+shows the same diagnosis. Otherwise: is Lightroom Classic open? In Lightroom:
 **File > Plug-in Extras > Claude Bridge: Show Status**. If "Run loop active" is
 *no*, choose **Claude Bridge: Start / Restart**. Confirm it is enabled in
 Plug-in Manager.
+
+**`predates protocol json-1`, `unauthorized` or `parse error ... lrc daemon
+stop`** after upgrading: the plug-in and the CLI must both be 2.0+. Reload the
+plug-in (Plug-in Manager, then Reload Plug-in, or restart Lightroom) and run
+`./lrc daemon stop`; the next command starts the new daemon.
 
 **`No active photo...`** Select a photo in Lightroom first. Most edits act on the
 active photo.
@@ -247,20 +261,35 @@ Logs: `~/.claude-lrc-bridge/daemon.log` (bridge side) and the in-Lightroom
 - The plug-in opens two `LrSocket` listeners on localhost (one receive, one
   send) and runs a command loop inside a single async task and function context,
   so every Develop, catalog and export call happens in a valid context.
-- **Inbound** (bridge to Lightroom): one **Lua table literal** per line, e.g.
-  `{id=7,cmd="set",params={Exposure=0.5}}`. The plug-in parses it with
-  `loadstring` inside an **empty sandbox environment**, so a command line can
-  only build a data table; it can never call code.
+- **Inbound** (bridge to Lightroom): one **JSON** object per line, e.g.
+  `{"id":7,"cmd":"set","params":{"Exposure":0.5},"token":"..."}`. A strict
+  data-only decoder parses it (nothing is evaluated), and `token` must match
+  the secret the plug-in wrote to `~/.claude-lrc-bridge/auth.token`.
 - **Outbound** (Lightroom to bridge): one **JSON** object per line, e.g.
   `{"id":7,"ok":true,"result":{...}}`.
 - The Python **daemon** holds both sockets open for the whole session (the
   stable, Adobe-documented model), exposes a Unix socket for the CLI, correlates
-  each reply by `id`, and transparently reconnects if Lightroom restarts.
+  each reply by `id`, and transparently reconnects if Lightroom restarts. It
+  pings the plug-in (5 s limit) before trusting a fresh, idle or timed-out
+  link, so a busy or stuck plug-in fails in seconds with a diagnosis.
+- When a client disconnects, the plug-in rebinds its response port, so the
+  next client (a restarted daemon, for example) is served without restarting
+  the plug-in. Commands whose replies can no longer be delivered are dropped,
+  never run unanswered.
 
 ## Security
 
 - Localhost only (127.0.0.1). Nothing is exposed to your network.
-- Inbound commands are executed as **data**, not code (sandboxed `loadstring`).
+- Inbound commands are **data**, never code: a strict JSON decoder, no
+  `loadstring`. (Releases before 2.0 parsed commands with `loadstring`, and
+  because Lightroom's plug-in environment has no `setfenv`, the intended
+  sandbox did not exist: a local process that reached port 49463 could make
+  Lightroom evaluate an expression. Upgrade.)
+- Every command must carry the per-start secret from
+  `~/.claude-lrc-bridge/auth.token` (a fresh 256-bit value from
+  `/dev/urandom` each time the plug-in starts; the folder is kept owner-only).
+  Other local users, and software that cannot read your files (for example a
+  web page posting to `localhost:49463`), cannot drive Lightroom.
 - The bridge can do anything you can do in Develop: treat it like handing an
   assistant your mouse. Everything is visible in History and reversible.
 
