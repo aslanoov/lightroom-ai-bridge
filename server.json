@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.aslanoov/lightroom-ai-bridge",
-  "description": "Drive Adobe Lightroom Classic's Develop module (tone, colour, crop, AI masks, ratings, before/after previews) from Claude or any MCP client. macOS only; requires Lightroom Classic with the Lightroom AI Bridge plug-in (shown in Lightroom as Claude Bridge).",
+  "description": "Lightroom MCP server for Adobe Lightroom Classic on macOS. Edit photos, use masks and presets, manage ratings and compare rendered previews via Model Context Protocol (stdio). Requires the Lightroom Classic plug-in, shown as Claude Bridge.",
   "status": "active",
   "version": "2.0.0",
   "repository": {

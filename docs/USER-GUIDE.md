@@ -1,6 +1,8 @@
-# Lightroom AI Bridge user guide
+# Lightroom AI Bridge - Lightroom MCP setup and user guide
 
-From "I have Lightroom and nothing else" to a finished edit, in order.
+Connect an AI client to Adobe Lightroom Classic through Model Context Protocol
+(MCP), then work from a rendered preview to a finished edit. Lightroom AI Bridge
+includes a local stdio MCP server, a CLI and a Lightroom Classic plug-in for macOS.
 
 If you already installed the plug-in and just want the commands, go to
 [COMMAND-REFERENCE.md](COMMAND-REFERENCE.md).
@@ -11,7 +13,7 @@ If you already installed the plug-in and just want the commands, go to
 2. [Before you start](#2-before-you-start)
 3. [Install the Lightroom plug-in](#3-install-the-lightroom-plug-in)
 4. [Install the CLI](#4-install-the-cli)
-5. [Connect Claude](#5-connect-claude)
+5. [Connect an MCP client or Claude Code](#5-connect-an-mcp-client-or-claude-code)
 6. [Your first edit](#6-your-first-edit)
 7. [How to talk to it](#7-how-to-talk-to-it)
 8. [Everyday workflows](#8-everyday-workflows)
@@ -27,11 +29,11 @@ If you already installed the plug-in and just want the commands, go to
 
 ## 1. What this is, and what it is not
 
-**It is** a remote control for Lightroom Classic's Develop module that an AI can
-operate while looking at the photo. Claude renders your photo through
-Lightroom's own pipeline, inspects the JPEG, moves real sliders, renders again,
-and compares. Everything it does is a normal non-destructive Develop step,
-recorded in your History panel as "Claude: ...", on your real catalog.
+**It is** a Lightroom MCP server and CLI for Lightroom Classic's Develop
+module. An image-capable MCP client can render your photo through Lightroom's
+own pipeline, inspect the JPEG, move real sliders, render again and compare.
+Everything it does is a normal non-destructive Develop step, recorded in your
+History panel as "Claude: ...", on your real catalog.
 
 **It is not** an image generator, an upscaler, or a filter pack. It never
 rewrites your RAW files. It cannot invent content unless you explicitly ask it
@@ -154,9 +156,56 @@ connection open, so later calls are instant. It stops when you log out, or with
 
 ---
 
-## 5. Connect Claude
+<a id="5-connect-claude"></a>
 
-### Claude Code with the skills (recommended)
+## 5. Connect an MCP client or Claude Code
+
+### Lightroom MCP setup
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if needed.
+The local server uses Model Context Protocol over **stdio** and exposes **46
+tools in total, including seven knowledge-base tools**, with before/after
+previews returned as inline images. Use an image-capable client for visual
+editing. For clients using `mcpServers` configuration, such as Claude Desktop,
+add:
+
+```json
+{
+  "mcpServers": {
+    "lightroom": {
+      "command": "uv",
+      "args": ["run", "--directory", "/Users/you/lightroom-ai-bridge", "lightroom-bridge"]
+    }
+  }
+}
+```
+
+Claude Code:
+
+```bash
+claude mcp add lightroom -- uv run --directory ~/lightroom-ai-bridge lightroom-bridge
+```
+
+Replace `/Users/you/lightroom-ai-bridge` with your checkout path. Restart or
+reconnect the client, then ask it to "ping Lightroom". Install from source for
+now; the package is not yet published to PyPI.
+
+The seven `kb_*` tools provide the same knowledge-base loop the skills use.
+The server finds `kb/` next to the package in a source checkout. To use a
+different knowledge-base directory, set:
+
+```bash
+export LIGHTROOM_BRIDGE_KB="$HOME/lightroom-ai-bridge/kb"
+```
+
+That export applies to clients launched from the same shell. For a desktop
+client, add `"env": {"LIGHTROOM_BRIDGE_KB": "/absolute/path/to/kb"}` alongside
+`command` and `args` in its MCP server configuration instead.
+
+> The MCP server and the CLI share one daemon, so you can use both without them
+> fighting over the plug-in (which accepts a single client).
+
+### Claude Code with the skills
 
 ```bash
 cd ~/lightroom-ai-bridge
@@ -178,43 +227,6 @@ echo 'export LIGHTROOM_BRIDGE_HOME="$HOME/code/lightroom-bridge"' >> ~/.zshrc
 Then start Claude Code (from anywhere) and type `/lightroom-bridge`. You can
 also just describe what you want: the skill triggers on intent, so "darken the
 sky on this shot" is enough.
-
-### Any MCP client
-
-The package ships an MCP server that exposes the same operations as 46 native
-tools, with before/after previews returned as inline images. Claude Desktop:
-*Settings > Developer > Edit Config*:
-
-```json
-{
-  "mcpServers": {
-    "lightroom": {
-      "command": "uv",
-      "args": ["run", "--directory", "/Users/you/lightroom-ai-bridge", "lightroom-bridge"]
-    }
-  }
-}
-```
-
-Claude Code:
-
-```bash
-claude mcp add lightroom -- uv run --directory ~/lightroom-ai-bridge lightroom-bridge
-```
-
-Then ask the client to "ping Lightroom". Once the package is on PyPI, the
-`--directory` form can be replaced with plain `uvx lightroom-bridge`.
-
-The MCP server also exposes seven `kb_*` tools so an MCP client gets the same
-knowledge-base loop the skills use. It finds `kb/` next to the package in a
-source checkout; from a PyPI install, point it at one:
-
-```bash
-export LIGHTROOM_BRIDGE_KB="$HOME/lightroom-ai-bridge/kb"
-```
-
-> The MCP server and the CLI share one daemon, so you can use both without them
-> fighting over the plug-in (which accepts a single client).
 
 ### Plain shell
 

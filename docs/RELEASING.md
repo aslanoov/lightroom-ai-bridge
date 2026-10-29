@@ -1,4 +1,4 @@
-# Releasing Lightroom AI Bridge
+# Releasing Lightroom AI Bridge - Lightroom Classic MCP server
 
 How a version goes from `main` to a published release. Maintainers only; users
 want the [user guide](USER-GUIDE.md).
@@ -71,20 +71,45 @@ Manager.
 **6. Tag and push.**
 
 ```bash
-git tag -a vX.Y.Z -m "Lightroom AI Bridge X.Y.Z"
+git tag -a vX.Y.Z -m "Lightroom AI Bridge X.Y.Z - Lightroom Classic MCP server"
 git push origin main
 git push origin vX.Y.Z
 ```
 
-**7. GitHub release.** Use the changelog section as the notes:
+**7. GitHub release.** Lead with Lightroom MCP so people searching for an AI
+integration can recognize what the release contains. Keep Lightroom AI Bridge
+as the product name. Start with this introduction, then append the changelog
+section, including any upgrade requirements and known limitations:
 
 ```bash
-awk '/^## \[X.Y.Z\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md > /tmp/notes.md
-gh release create vX.Y.Z --title "Lightroom AI Bridge X.Y.Z" --notes-file /tmp/notes.md
+cat > /tmp/notes.md <<'EOF'
+Lightroom AI Bridge is an open-source Lightroom MCP server (Model Context
+Protocol) and CLI for Adobe Lightroom Classic on macOS. Connect Claude Desktop,
+Claude Code or another stdio MCP client to edit Develop settings, use masks and
+presets, manage ratings and compare rendered previews. Requires Lightroom
+Classic 15.3+ and the included plug-in, shown in Lightroom as Claude Bridge.
+
+MCP setup and installation: https://github.com/aslanoov/lightroom-ai-bridge/blob/vX.Y.Z/README.md#lightroom-mcp-setup
+
+EOF
+awk '/^## \[X.Y.Z\]/{f=1;next} /^## \[/{f=0} f' CHANGELOG.md >> /tmp/notes.md
+gh release create vX.Y.Z --title "Lightroom AI Bridge X.Y.Z - Lightroom Classic MCP server" --notes-file /tmp/notes.md
 ```
 
-Edit the notes on GitHub afterwards if they need a short intro paragraph; the
-changelog stays the source of truth.
+The changelog stays the source of truth for what changed. Update the introduction
+if capabilities or requirements change. Do not imply PyPI or MCP Registry
+availability until those publications are verified.
+
+Keep the GitHub About description aligned with the README and package metadata:
+
+> Lightroom MCP server (Model Context Protocol) for Adobe Lightroom Classic on
+> macOS. Edit photos, use masks and presets, manage ratings and compare previews
+> with Claude or other MCP clients. Includes a CLI and Lightroom plug-in.
+
+Include the relevant discovery topics `lightroom-mcp`, `lightroom-classic`,
+`lightroom-plugin`, `mcp`, `mcp-server`, `model-context-protocol` and `photo-editing`.
+The repository slug, package name `lightroom-bridge`, registry identifier and
+plug-in name are stable identities; a positioning update does not rename them.
 
 **8. PyPI** (from the first PyPI release on). Needs a PyPI API token for the
 `lightroom-bridge` project.

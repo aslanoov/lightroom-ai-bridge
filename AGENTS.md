@@ -40,9 +40,9 @@ itself what it supports.
 
 ## If you speak MCP instead of shell
 
-The package ships an MCP server (`lightroom-bridge`) exposing the same
-operations as 46 tools, with previews returned as inline images and seven `kb_*`
-tools for the knowledge base. Setup is in `README.md`. It shares one daemon with
+The package ships a stdio MCP server (`lightroom-bridge`) exposing 46 tools in
+total, including seven `kb_*` tools for the knowledge base, with previews
+returned as inline images. Setup is in `README.md`. It shares one daemon with
 the CLI, so both can be live at once. Point `LIGHTROOM_BRIDGE_KB` at a `kb/`
 directory if you installed the package without a source checkout.
 

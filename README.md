@@ -1,28 +1,35 @@
-# Lightroom AI Bridge
+# Lightroom AI Bridge - MCP server for Lightroom Classic
 
-Let Claude edit your photos in a **real, running Adobe Lightroom Classic**.
+An open-source **Lightroom MCP server** for **Adobe Lightroom Classic** on macOS.
+Connect Claude Desktop, Claude Code or another **Model Context Protocol (MCP)**
+client to inspect photos, edit Develop settings and compare rendered previews.
+Includes a Lightroom plug-in, a command-line interface and optional Claude Code
+skills. Requires Lightroom Classic 15.3+; cloud Lightroom is not supported.
 
-Not an AI image generator, not a filter app. This drives Lightroom's actual
+This drives Lightroom's actual
 Develop module: exposure, white balance, tone, color grading, HSL, crop and
 straighten, AI masks (select sky, select subject), presets, ratings and flags,
 snapshots, undo. Every change is a normal, non-destructive Develop step that
 shows up in your History panel as "Claude: ...", on your own RAW files, in your
 own catalog. Your originals are never touched.
 
-The trick that makes it work: Claude can **see** the photo. It renders a JPEG
-through Lightroom's pipeline, looks at it, edits, renders again, and compares.
-Look, edit, look.
+The MCP server returns JPEG previews inline so an image-capable AI client can
+**see** the photo through Lightroom's rendering pipeline, edit it, render again
+and compare. Look, edit, look.
 
 ```
-   you / Claude                 this repo                         Lightroom Classic
- +--------------+   commands  +--------------+   TCP sockets    +----------------------+
- |  ./lrc set   | ----------> |  lrc CLI     |  49463 commands  | ClaudeBridge         |
- |  ./lrc crop  |             |  + daemon    | ---------------> |  .lrplugin           |
- |  ./lrc render| <---------- |              |  49464 responses |  (LrDevelopController|
- +--------------+   JSON      +--------------+ <--------------- |   LrSelection, ...)  |
-        ^                            |  writes JPEG previews    +----------------------+
-        |   reads preview .jpg       v        to ~/.claude-lrc-bridge/previews/
-        +-------------------  ~/.claude-lrc-bridge/previews/*.jpg
+MCP client (Claude Desktop, Claude Code, other stdio clients)
+    | Model Context Protocol over stdio: tools + inline JPEG previews
+    v
+lightroom-bridge MCP server           lrc CLI / Claude Code skills
+    |                                    |
+    +------------> shared local daemon <-+
+                         | localhost TCP: 49463 / 49464
+                         v
+                 ClaudeBridge.lrplugin
+                         | Adobe Lightroom Classic SDK
+                         v
+                 Adobe Lightroom Classic
 ```
 
 It is built entirely on Adobe's public **Lightroom Classic SDK** using the same
@@ -32,6 +39,7 @@ slider). No private APIs, no screen-scraping, localhost only.
 
 **New here? Read [docs/USER-GUIDE.md](docs/USER-GUIDE.md).** It walks from "I
 have Lightroom and nothing else" to a finished edit, in order, with what to type.
+For the client configuration, jump to [Lightroom MCP setup](#lightroom-mcp-setup).
 
 > **One name to know:** inside Lightroom the plug-in appears as **Claude Bridge**
 > (in the Plug-in Manager and the Plug-in Extras menu). That is this project.
@@ -42,9 +50,9 @@ have Lightroom and nothing else" to a finished edit, in order, with what to type
 
 | Piece | What it is |
 |---|---|
+| MCP server (`lightroom-bridge`) | 46 tools, including seven knowledge-base tools, for stdio MCP clients. Rendered previews are returned as inline images. |
 | `ClaudeBridge.lrplugin/` | The Lightroom plug-in. Install it once into Lightroom. |
 | `lrc` CLI | 40+ commands: tone, WB, crop, masks, presets, ratings, snapshots, render. Pure Python 3 stdlib. |
-| MCP server | The same operations as 46 native tools for any MCP client (Claude Desktop, Claude Code, others). |
 | `skills/` | Two Claude Code skills: `/lightroom-bridge` (everyday editing and culling) and `/lightroom-bridge-pro` (a full professional edit of the selected shot, zero questions). |
 | `kb/` | A self-improving knowledge base of photographic judgment. **Ships empty on purpose.** It fills with *your* taste as you work. |
 | `bridge/` | Durable helper scripts: contact-sheet review, the two-stage culling funnel, verified batch apply, tilt measurement, attention-hierarchy check. |
@@ -52,7 +60,8 @@ have Lightroom and nothing else" to a finished edit, in order, with what to type
 **Requirements:** macOS and Adobe Lightroom Classic **15.3 or newer**. The `lrc`
 CLI needs only **Python 3** (already on macOS, no third-party packages). The MCP
 server additionally needs `fastmcp` and Python **3.10+**, both provisioned
-automatically by `uvx`. Pillow (`pip3 install --user Pillow`) is needed only for
+automatically by `uv run` in the source-checkout setup below. Pillow
+(`pip3 install --user Pillow`) is needed only for
 the contact-sheet helpers. macOS only: the bridge uses a Unix domain socket and
 `~/Library` paths; Windows and Linux are untested.
 
@@ -91,16 +100,12 @@ connection open; later calls are instant.
 
 ### 3. Pick how you want to drive it
 
-**A. Claude Code with skills (recommended).**
+#### Lightroom MCP setup
 
-```bash
-./skills/install.sh
-```
-
-Then in Claude Code: `/lightroom-bridge` or `/lightroom-bridge-pro`, or just say
-"open up the shadows on this shot". Details: [`skills/README.md`](skills/README.md).
-
-**B. Any MCP client.** Claude Desktop: *Settings > Developer > Edit Config*:
+**A. Connect an MCP client.** Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
+if needed. The server runs locally over **stdio** and connects to the installed
+Lightroom plug-in through the shared daemon. For clients using `mcpServers`
+configuration, such as Claude Desktop, add:
 
 ```json
 { "mcpServers": { "lightroom": {
@@ -115,11 +120,23 @@ In Claude Code that is one line:
 claude mcp add lightroom -- uv run --directory /absolute/path/to/this/repo lightroom-bridge
 ```
 
-Once the package is published to PyPI, `uvx lightroom-bridge` replaces the
-`--directory` form. The MCP server exposes the same operations as 46 tools, with
-before/after previews returned as inline images, plus seven `kb_*` tools for the
-knowledge base. It shares one daemon with the CLI, so the two cooperate rather
-than fight over the single-client plug-in.
+Replace `/absolute/path/to/this/repo` with your checkout path. Restart or
+reconnect the client, then ask it to "ping Lightroom". Use an image-capable
+client for the look, edit, look workflow.
+
+Install from source for now; the package is not yet published to PyPI. The
+server exposes **46 tools in total, including seven `kb_*` tools**, with
+before/after previews returned as inline images. It shares one daemon with the
+CLI, so both can be used in the same session.
+
+**B. Claude Code with skills.**
+
+```bash
+./skills/install.sh
+```
+
+Then in Claude Code: `/lightroom-bridge` or `/lightroom-bridge-pro`, or just say
+"open up the shadows on this shot". Details: [`skills/README.md`](skills/README.md).
 
 **C. Plain shell.** Use `./lrc ...` directly, or `pip install -e .` to get `lrc`
 on your `PATH`.

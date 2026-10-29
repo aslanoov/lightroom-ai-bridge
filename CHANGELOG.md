@@ -7,6 +7,18 @@ All notable changes to Lightroom AI Bridge are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Lead the README, package and MCP server descriptions with Lightroom MCP and
+  Model Context Protocol so photographers can find the Lightroom Classic
+  integration. The project, package, plug-in and registry names stay the same.
+- Put the stdio MCP setup first in the README and user guide, show how the MCP
+  server connects to the Lightroom plug-in, and clarify macOS and Lightroom
+  Classic support. The 46 MCP tools include the seven knowledge-base tools.
+- Include Lightroom Classic MCP in future release titles and introductions.
+  This is a documentation and discoverability update; runtime behavior is
+  unchanged.
+
 ## [2.0.0] - 2026-10-16
 
 A security and reliability release. **Upgrade both halves together:** reload
