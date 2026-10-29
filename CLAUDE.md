@@ -154,7 +154,8 @@ Extras menu). It is a UI step; do not try to fix it from the shell.
   needing a region or click in the UI silently create nothing: `rangeMask
   luminance` and `aiSelection objects` are confirmed, likely all `rangeMask`
   subtypes and `aiSelection color/depth`. **After every create, confirm with
-  `mask list`.** To pull down a blown region a rangeMask cannot reach, use
+  `mask list`** (on 15.6 it reads empty for about 2 s while the AI selection
+  computes: wait and list again before concluding nothing was created). To pull down a blown region a rangeMask cannot reach, use
   global `Whites` (near-surgical when only that region is at or above 250;
   measure per-region percentage first).
 - **AI masks under-apply on creation.** The `local_*` values passed to `mask

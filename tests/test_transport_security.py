@@ -63,6 +63,22 @@ class PluginSourceTests(unittest.TestCase):
         self.assertNotIn('loadstring', code)
 
 
+class VersionTests(unittest.TestCase):
+    def test_ping_reports_the_manifest_version(self):
+        lua = LuaRuntime(unpack_returned_tuples=True)
+        lua.execute(FIXTURE)
+        info = LuaRuntime(unpack_returned_tuples=True).execute(
+            (ROOT / 'ClaudeBridge.lrplugin/Info.lua').read_text())
+        v = info.VERSION
+        lua.globals().require = lua.eval(
+            'function(n) return {VERSION={major=%d,minor=%d,revision=%d}} end'
+            % (v.major, v.minor, v.revision))
+        source = SOURCE.split('-- Socket server + main loop', 1)[0]
+        reported = lua.execute(source + '\nreturn PLUGIN_VERSION')
+        self.assertEqual(reported, '%d.%d.%d' % (v.major, v.minor, v.revision))
+        self.assertIn('version   = PLUGIN_VERSION', SOURCE, 'ping must report PLUGIN_VERSION')
+
+
 class JsonDecoderTests(unittest.TestCase):
     def setUp(self):
         self.lua, self.x = load_dispatch()

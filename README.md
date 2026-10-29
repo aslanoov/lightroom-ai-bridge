@@ -313,7 +313,8 @@ Logs: `~/.claude-lrc-bridge/daemon.log` (bridge side) and the in-Lightroom
 ## Status
 
 Tested end-to-end against Adobe Lightroom Classic **15.3 and 15.4** on macOS
-with Sony `.ARW` RAW files. Confirmed working: `ping`, `status`, `settings`,
+with Sony `.ARW` RAW files; release 2.0.0 (protocol, token, reconnects and the
+release smoke test) was verified against **15.6**. Confirmed working: `ping`, `status`, `settings`,
 `list-selected`, `help`, `set`, `value`, `range`, `apply`, `wb`, `auto-tone`,
 `auto-wb`, `crop`, `crop-reset`, masking (create plus local adjustments,
 visibly applied), `reset`, `render` before/after, `preset list` / `apply` /

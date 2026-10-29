@@ -52,7 +52,11 @@ local AUTH_PATH   = LrPathUtils.child(BRIDGE_DIR, 'auth.token')
 local PROTOCOL    = 'json-1'
 local LOG_MAX_BYTES = 5 * 1024 * 1024
 
-local PLUGIN_VERSION = '1.1.0'
+-- Single source of truth: Info.lua's VERSION (what Plug-in Manager shows).
+-- A hard-coded copy here drifted (1.0.0 shipped plug-in 1.2.0 reporting 1.1.0).
+local manifest = require 'Info'
+local version = manifest.VERSION
+local PLUGIN_VERSION = string.format('%d.%d.%d', version.major, version.minor, version.revision)
 
 --==============================================================================
 -- Minimal JSON encoder (Lua 5.1).  Used only for outbound responses; the

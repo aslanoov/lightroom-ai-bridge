@@ -7,19 +7,7 @@ All notable changes to Lightroom AI Bridge are recorded here. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-- Lead the README, package and MCP server descriptions with Lightroom MCP and
-  Model Context Protocol so photographers can find the Lightroom Classic
-  integration. The project, package, plug-in and registry names stay the same.
-- Put the stdio MCP setup first in the README and user guide, show how the MCP
-  server connects to the Lightroom plug-in, and clarify macOS and Lightroom
-  Classic support. The 46 MCP tools include the seven knowledge-base tools.
-- Include Lightroom Classic MCP in future release titles and introductions.
-  This is a documentation and discoverability update; runtime behavior is
-  unchanged.
-
-## [2.0.0] - 2026-10-16
+## [2.0.0] - 2026-10-30
 
 A security and reliability release. **Upgrade both halves together:** reload
 the plug-in (Plug-in Manager, then Reload Plug-in, or restart Lightroom; it now
@@ -55,6 +43,21 @@ CLI refuse each other with a message that says exactly this.
 - With Lightroom closed, commands fail immediately instead of after 8 seconds,
   while a plug-in reload in progress is still waited out.
 
+- `ping` reports the plug-in's real version. 1.0.0 shipped plug-in 1.2.0 but
+  reported 1.1.0 from a hard-coded copy; the version now comes from the
+  plug-in manifest, the same number Plug-in Manager shows.
+
+### Changed
+
+- Lead the README, package and MCP server descriptions with Lightroom MCP and
+  Model Context Protocol so photographers can find the Lightroom Classic
+  integration. The project, package, plug-in and registry names stay the same.
+- Put the stdio MCP setup first in the README and user guide, show how the MCP
+  server connects to the Lightroom plug-in, and clarify macOS and Lightroom
+  Classic support. The 46 MCP tools include the seven knowledge-base tools.
+- Include Lightroom Classic MCP in release titles and introductions. These
+  entries are documentation and discoverability changes only.
+
 ### Added
 
 - Errors carry a `diagnosis`: which process holds ports 49463/49464 (for
@@ -67,6 +70,15 @@ CLI refuse each other with a message that says exactly this.
 - Tests in `tests/` for the decoder, the token check, liveness probes,
   reconnects, diagnosis and housekeeping, runnable without Lightroom
   (`uv run --extra test python -m unittest discover -s tests`).
+
+### Known limitations
+
+- Pre-existing behavior on Lightroom Classic 15.6, unchanged by this release:
+  right after an AI mask create, `mask list` can read empty for about two
+  seconds while Lightroom computes the selection, and on RAW files the values
+  passed to `mask create` may land only after one `mask adjust` re-push. Check
+  `mask list` again after a short wait and verify the mask by render.
+- Not yet published to PyPI; install from source (see the user guide).
 
 ## [1.0.0] - 2026-09-26
 
