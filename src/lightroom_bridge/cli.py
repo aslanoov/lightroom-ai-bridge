@@ -115,6 +115,9 @@ def build_parser():
 
     add("ping", help="handshake + active photo summary")
     add("status", help="module, catalog and selection summary")
+    add("capabilities", help="SDK support and UI-only feature limitations")
+    add("review-selection", help="read native culling/duplicate-view selections and folder stacks")
+    add("ai-state", help="partial AI state (not a universal completion or AI-free check)")
     add("list-selected", help="list all selected photos")
     s = add("settings", help="full Develop settings of the active photo")
     s.add_argument("--uuid", help="target a specific photo without changing the selection")
@@ -150,6 +153,11 @@ def build_parser():
     s.add_argument("--history", help="custom name for the History step")
     add("crop-reset", help="clear the crop")
 
+    s = add("geometry", help="state-bound crop/geometry workflow; see bridge/geometry-audit.md")
+    s.add_argument("operation", choices=["capture", "plan", "apply", "audit", "transfer", "suggest"])
+    s.add_argument("--json", dest="geometry_json", help="operation arguments as a JSON object")
+    s.add_argument("--file", dest="geometry_file", help="operation arguments from a JSON file")
+
     s = add("rotate", help="rotate the photo")
     s.add_argument("dir", choices=["left", "right"])
     s.add_argument("--uuid", help="rotate a specific photo without changing the selection")
@@ -166,7 +174,7 @@ def build_parser():
     s.add_argument("param", nargs="?")
 
     s = add("tool", help="select a Develop tool")
-    s.add_argument("tool", help="loupe|crop|dust|redeye|masking|upright")
+    s.add_argument("tool", help="loupe|crop|dust|redeye|masking|upright|point_color|local_point_color|depth_refinement")
 
     # Masking
     s = add("mask", help="masking operations")
@@ -177,11 +185,40 @@ def build_parser():
         m.add_argument("rest", nargs="*",
                        help="[subtype] local_* adjustments, e.g. sky local_Exposure=-0.4")
     m = with_global_flags(msub.add_parser("adjust")); m.add_argument("pairs", nargs="+")
+    m.add_argument("--id", help="explicit mask target")
     with_global_flags(msub.add_parser("list"))
     with_global_flags(msub.add_parser("reset"))
     m = with_global_flags(msub.add_parser("invert")); m.add_argument("--id")
     m = with_global_flags(msub.add_parser("delete")); m.add_argument("id")
     m = with_global_flags(msub.add_parser("select")); m.add_argument("id")
+    for verb in ("duplicate-invert", "toggle-hidden"):
+        m = with_global_flags(msub.add_parser(verb)); m.add_argument("--id")
+    m = with_global_flags(msub.add_parser("delete-empty"))
+    m.add_argument("--targets", choices=["active", "selected"], default="active")
+    m = with_global_flags(msub.add_parser("component"))
+    m.add_argument("operation", choices=["select", "delete", "toggle-hidden", "toggle_hidden", "invert"])
+    m.add_argument("tool_id")
+    m.add_argument("--mask-id")
+
+    s = add("point-color", help="global or per-mask Point Color / Variance")
+    s.add_argument("operation", choices=["list", "add", "update", "select", "delete", "clear"])
+    s.add_argument("pairs", nargs="*", help="swatch fields as KEY=VALUE; source Hue 0..6, Sat/Lum 0..1")
+    s.add_argument("--json", dest="swatch_json", help="swatch object, including nested color ranges")
+    s.add_argument("--index", type=int, help="swatch index 1..8")
+    s.add_argument("--local", dest="is_local", action="store_true", help="use per-mask Point Color")
+    s.add_argument("--mask-id")
+
+    s = add("update-ai", help="request AI recomputation; completion must be verified")
+    s.add_argument("--targets", choices=["active", "selected"], default="active")
+    s = add("enhance", help="AI Enhance (skip when the destination labels AI edits)")
+    s.add_argument("feature", choices=["denoise", "rawDetails", "superRes"])
+    s.add_argument("--disable", action="store_true")
+    s.add_argument("--amount", type=float, default=50)
+    s = add("reflection", help="Reflection Removal (skip when the destination labels AI edits)")
+    s.add_argument("operation", choices=["state", "enable", "disable"])
+    s.add_argument("--amount", type=float)
+    s.add_argument("--quality", choices=["preview", "standard", "best"])
+    s.add_argument("--timeout", type=float, default=90)
 
     # Presets
     s = add("preset", help="develop presets")
@@ -191,6 +228,8 @@ def build_parser():
     pa.add_argument("name", nargs="?", help="preset name (or use --uuid for an exact match)")
     pa.add_argument("--uuid", help="preset uuid from `preset list` (unambiguous)")
     pa.add_argument("--targets", choices=["active", "selected"], default="active")
+    pa.add_argument("--amount", type=int, default=100, help="preset strength 0..200, where supported")
+    pa.add_argument("--update-ai", action="store_true", help="request AI recomputation (respect channel policy)")
     ps = with_global_flags(psub.add_parser(
         "save", help="save the current edit as a UI-visible develop preset "
                      "(XMP in CameraRaw/Settings; loads at next Lightroom restart)"))
@@ -279,10 +318,22 @@ def dispatch_cli(args):
         _note_direct()
     cmd = args.command
 
+    if cmd == "geometry":
+        from . import geometry
+        if bool(args.geometry_json) == bool(args.geometry_file):
+            return {"ok": False, "error": "Provide exactly one of --json or --file"}
+        try:
+            from pathlib import Path
+            params = json.loads(Path(args.geometry_file).read_text() if args.geometry_file else args.geometry_json)
+            return geometry.run(args.operation, **params)
+        except (ValueError, TypeError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
     if cmd == "ping":
         return call("ping")
     if cmd == "status":
         return call("status")
+    if cmd in ("capabilities", "review-selection", "ai-state"):
+        return call(cmd.replace("-", "_"))
     if cmd == "list-selected":
         return call("list_selected")
     if cmd == "settings":
@@ -360,7 +411,19 @@ def dispatch_cli(args):
                 params["values"] = parse_kv(rest)
             return call("mask_" + mc, params)
         if mc == "adjust":
-            return call("mask_adjust", {"values": parse_kv(args.pairs)})
+            params = {"values": parse_kv(args.pairs)}
+            if args.id:
+                params["id"] = args.id
+            return call("mask_adjust", params)
+        if mc in ("duplicate-invert", "toggle-hidden"):
+            return call("mask_" + mc.replace("-", "_"), {"id": args.id} if args.id else {})
+        if mc == "delete-empty":
+            return call("mask_delete_empty", {"targets": args.targets})
+        if mc == "component":
+            params = {"operation": args.operation.replace("-", "_"), "toolId": args.tool_id}
+            if args.mask_id:
+                params["maskId"] = args.mask_id
+            return call("mask_tool", params)
         if mc == "list":
             return call("mask_list")
         if mc == "reset":
@@ -371,6 +434,34 @@ def dispatch_cli(args):
             return call("mask_delete", {"id": args.id})
         if mc == "select":
             return call("mask_select", {"id": args.id})
+
+    if cmd == "point-color":
+        params = {"operation": args.operation, "isLocal": args.is_local}
+        swatch = json.loads(args.swatch_json) if args.swatch_json else {}
+        if not isinstance(swatch, dict):
+            raise SystemExit("point-color --json must be an object")
+        swatch.update(parse_kv(args.pairs))
+        if swatch:
+            params["swatch"] = swatch
+        if args.index is not None:
+            params["index"] = args.index
+        if args.mask_id:
+            params["maskId"] = args.mask_id
+        return call("point_color", params)
+
+    if cmd == "update-ai":
+        return call("update_ai_settings", {"targets": args.targets})
+    if cmd == "enhance":
+        return call("enhance", {"feature": args.feature, "enable": not args.disable, "amount": args.amount})
+    if cmd == "reflection":
+        if args.operation == "state":
+            return call("reflection_state")
+        params = {"enable": args.operation == "enable", "timeout": args.timeout}
+        if args.amount is not None:
+            params["amount"] = args.amount
+        if args.quality:
+            params["quality"] = args.quality
+        return call("reflection_removal", params)
 
     if cmd == "preset":
         if args.preset_cmd == "list":
@@ -391,7 +482,7 @@ def dispatch_cli(args):
                 group=args.group, dry_run=args.dry_run, force=args.force)
         if not args.name and not args.uuid:
             raise SystemExit("preset apply: give a name or --uuid")
-        params = {"targets": args.targets}
+        params = {"targets": args.targets, "amount": args.amount, "updateAISettings": args.update_ai}
         if args.name:
             params["name"] = args.name
         if args.uuid:

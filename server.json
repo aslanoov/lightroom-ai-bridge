@@ -3,7 +3,7 @@
   "name": "io.github.aslanoov/lightroom-ai-bridge",
   "description": "Lightroom MCP server for Adobe Lightroom Classic on macOS. Edit photos, use masks and presets, manage ratings and compare rendered previews via Model Context Protocol (stdio). Requires the Lightroom Classic plug-in, shown as Claude Bridge.",
   "status": "active",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "repository": {
     "url": "https://github.com/aslanoov/lightroom-ai-bridge",
     "source": "github"
@@ -13,7 +13,7 @@
       "registry_type": "pypi",
       "registry_base_url": "https://pypi.org",
       "identifier": "lightroom-bridge",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "transport": {
         "type": "stdio"
       }

@@ -44,6 +44,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -82,7 +83,7 @@ HANDOFF_GRACE_S = 15.0      # a fresh 'stopped' may be a reload in progress
 
 LOG_MAX_BYTES = 5 * 1024 * 1024
 # Renders land in PREVIEW_DIR and every caller copies them out immediately
-# (--out, the MCP inline image), so they are disposable.
+# (--out, the MCP inline image, geometry capture), so they are disposable.
 PREVIEW_MAX_AGE_S = 24 * 3600
 PREVIEW_MAX_BYTES = 1 << 30
 PREVIEW_MIN_AGE_S = 600     # never touch a render younger than this
@@ -215,12 +216,25 @@ def diagnose(unresponsive=False, owners=None):
 # Housekeeping: preview cache and log size
 # --------------------------------------------------------------------------- #
 
+def _entry_size(path, is_dir):
+    if not is_dir:
+        return os.lstat(path).st_size
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
 def prune_previews(root=PREVIEW_DIR, now=None, max_age=PREVIEW_MAX_AGE_S,
                    max_bytes=PREVIEW_MAX_BYTES, min_age=PREVIEW_MIN_AGE_S):
     """Delete stale renders: anything older than `max_age`, then the oldest
-    until the cache is under `max_bytes`. Only *.jpg/*.jpeg files at the top
-    level are candidates, and nothing younger than `min_age` (a caller may
-    still be copying it)."""
+    until the cache is under `max_bytes`. Only *.jpg/*.jpeg files and
+    geometry-* folders at the top level are candidates, and nothing younger
+    than `min_age` (a caller may still be copying it)."""
     now = time.time() if now is None else now
     entries = []
     try:
@@ -231,23 +245,30 @@ def prune_previews(root=PREVIEW_DIR, now=None, max_age=PREVIEW_MAX_AGE_S,
         path = os.path.join(root, name)
         try:
             st = os.lstat(path)
-            if os.path.islink(path) or not os.path.isfile(path) \
-                    or not name.lower().endswith((".jpg", ".jpeg")):
+            is_dir = os.path.isdir(path) and not os.path.islink(path)
+            if is_dir and name.startswith("geometry-"):
+                pass
+            elif not is_dir and os.path.isfile(path) and name.lower().endswith((".jpg", ".jpeg")):
+                pass
+            else:
                 continue
-            entries.append((st.st_mtime, st.st_size, path))
+            entries.append((st.st_mtime, _entry_size(path, is_dir), path, is_dir))
         except OSError:
             continue
     entries.sort()  # oldest first
     total = sum(e[1] for e in entries)
     removed = freed = 0
-    for mtime, size, path in entries:
+    for mtime, size, path, is_dir in entries:
         age = now - mtime
         if age < min_age:
             break  # sorted: everything after this is younger still
         if age <= max_age and total <= max_bytes:
             continue
         try:
-            os.remove(path)
+            if is_dir:
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
         except OSError:
             continue
         total -= size
@@ -311,7 +332,7 @@ def _lr_timeout(cmd):
     caller-requested long render isn't cut off at the socket layer. Other
     commands get 45s: above the plug-in's 30s catalog write-access window, so
     a busy catalog surfaces as the plug-in's own error, not a transport cut."""
-    if cmd.get("cmd") not in ("render", "thumb"):
+    if cmd.get("cmd") not in ("render", "geometry_capture", "thumb", "reflection_removal", "remove_people"):
         return 45
     try:
         t = float((cmd.get("params") or {}).get("timeout") or 0)
@@ -326,8 +347,8 @@ def _lr_timeout(cmd):
 # catalog write, so those return an error instead of retrying.
 _RESEND_SAFE = frozenset((
     "ping", "status", "list_selected", "get_settings", "get_metadata",
-    "get_value", "get_range", "preset_list", "mask_list", "snapshot_list",
-    "help", "render", "thumb",
+    "geometry_state", "get_value", "get_range", "preset_list", "mask_list", "snapshot_list",
+    "help", "render", "thumb", "capabilities", "review_selection", "ai_state", "reflection_state", "enhance_state",
 ))
 
 

@@ -199,7 +199,13 @@ def build_sheets(recs, out, cols):
 # --------------------------------------------------------------------------- #
 
 def cmd_triage(args):
-    photos = targeted_photos()
+    if args.native_selection:
+        response = lrc('review-selection')
+        if not response.get('ok'):
+            sys.exit('Cannot read native selection: ' + str(response.get('error')))
+        photos = response['result']['photos']
+    else:
+        photos = targeted_photos()
     print("Targeted photos: %d  (if that's just 1, press Cmd+A in the grid first)"
           % len(photos))
     if not photos:
@@ -219,6 +225,11 @@ def cmd_triage(args):
         recs.append({"gidx": gidx, "uuid": p["uuid"], "filename": p.get("filename", ""),
                      "folder": folder, "img": img, "sheet": sid, "cell": cell,
                      "key": sid + str(cell), "ok": ok})
+        if args.native_selection:
+            recs[-1]['nativeSelection'] = {
+                k: p[k] for k in ('rating', 'pickStatus', 'colorLabel', 'isVirtualCopy',
+                                  'masterPhoto', 'isInStackInFolder', 'stackPositionInFolder',
+                                  'stackInFolderMembers') if k in p}
         key = sid + str(cell)
         sys.stdout.write((key + " ") if ok else ("X" + key + " "))
         sys.stdout.flush()
@@ -226,6 +237,8 @@ def cmd_triage(args):
 
     manifest = {"size": args.size, "cols": args.cols, "per": args.per,
                 "count": len(recs), "out": args.out, "photos": recs}
+    manifest['selectionSource'] = 'native-ui-selection' if args.native_selection else 'selection'
+    manifest['nativeScoresAvailable'] = False
     with open(manifest_path(args.out), "w") as f:
         json.dump(manifest, f, indent=2)
     with open(os.path.join(args.out, "ratings_template.csv"), "w", newline="") as f:
@@ -403,6 +416,8 @@ def main(argv):
     t.add_argument("--size", type=int, default=800, help="long-edge px (default 800)")
     t.add_argument("--cols", type=int, default=4, help="sheet columns (default 4)")
     t.add_argument("--per", type=int, default=12, help="cells per sheet (default 12)")
+    t.add_argument("--native-selection", action="store_true",
+                   help="consume selected results after Lightroom Assisted Culling/Duplicates; preserve flags and stack metadata")
     t.set_defaults(func=cmd_triage)
 
     h = sub.add_parser("hires", parents=[common],

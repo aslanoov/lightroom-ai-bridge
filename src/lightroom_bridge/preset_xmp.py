@@ -9,8 +9,8 @@ to `preset list` / `preset apply` like any other preset. The SDK's own
 addDevelopPresetForPlugin was rejected for this feature: presets it
 creates are hidden from the Develop panel by design.
 
-The XMP shell mirrors knowledge/Clean_Tones.xmp (a preset verified to
-load in this user's LrC 15.4): flat crs:* attributes for sliders,
+The XMP shell mirrors a preset Lightroom Classic itself saved and was
+verified to load again: flat crs:* attributes for sliders,
 crs:Name / crs:Group as rdf:Alt children, tone curves as rdf:Seq pairs.
 
 Pure stdlib, Python 3.9 compatible (same contract as cli.py / _core.py).
@@ -30,7 +30,7 @@ DEFAULT_GROUP = "Claude"
 # What transfers between photos (a "look") vs. what is photo-specific.
 # Keys are raw develop-settings names exactly as photo:getDevelopSettings()
 # returns them. Groups off by default: wb and exposure are per-scene/per-frame
-# (kb/styles/clean-tones.md: "The preset is the grade, not the exposure").
+# (a look preset carries the grade, not the exposure).
 # Never included at all: crop/geometry, masks (write-broken via settings,
 # and scene-specific anyway), retouch, lens corrections, profile/Look.
 GROUPS = {

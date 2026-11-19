@@ -163,11 +163,11 @@ connection open, so later calls are instant. It stops when you log out, or with
 ### Lightroom MCP setup
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if needed.
-The local server uses Model Context Protocol over **stdio** and exposes **46
-tools in total, including seven knowledge-base tools**, with before/after
-previews returned as inline images. Use an image-capable client for visual
-editing. For clients using `mcpServers` configuration, such as Claude Desktop,
-add:
+The local server uses Model Context Protocol over **stdio** and exposes **62
+tools in total, including seven knowledge-base tools and six geometry tools**,
+with before/after previews returned as inline images. Use an image-capable
+client for visual editing. For clients using `mcpServers` configuration, such
+as Claude Desktop, add:
 
 ```json
 {
@@ -189,6 +189,12 @@ claude mcp add lightroom -- uv run --directory ~/lightroom-ai-bridge lightroom-b
 Replace `/Users/you/lightroom-ai-bridge` with your checkout path. Restart or
 reconnect the client, then ask it to "ping Lightroom". Install from source for
 now; the package is not yet published to PyPI.
+
+The six `geometry_*` tools (the measured crop and straighten workflow) need an
+optional extra: add `"--extra", "geometry"` right after `"run"` in the args
+above, or `--extra geometry` after `uv run` in the Claude Code line. Everything
+else works without it. After you update the repo, reload the plug-in and
+reconnect the client so it picks up new tools.
 
 The seven `kb_*` tools provide the same knowledge-base loop the skills use.
 The server finds `kb/` next to the package in a source checkout. To use a
@@ -297,7 +303,7 @@ them if it knows.
 |---|---|
 | "before and after" | Two renders you can compare side by side. |
 | "snapshot first" | A restore point in Lightroom you can return to at any time. |
-| "measure the tilt" | A numeric roll and keystone reading instead of an opinion. |
+| "measure the tilt" | Named horizontal and vertical reference lines measured on the render, with an overlay you can check, instead of an opinion. |
 | "does the subject win?" | The attention-hierarchy check, per region, with numbers. |
 | "save this as a preset" | The look becomes a real Develop preset in Lightroom. |
 | "sync this to the rest" | The recipe is applied across the set, verified per photo. |
@@ -362,6 +368,16 @@ python3 bridge/cull.py hires --from-csv ratings.csv --min 4   # full-res pass on
 python3 bridge/cull.py writeback ratings.csv    # verified writeback (--dry-run first)
 ```
 
+If you already ran Assisted Culling or the Duplicates view, select the frames
+it left you with and start from that selection instead:
+
+```bash
+python3 bridge/cull.py triage --native-selection   # keeps ratings, flags, stack info
+```
+
+Lightroom's own focus and eye scores are not reachable through the SDK, so
+they are never invented, and a stack is not taken as proof of a duplicate.
+
 The two stages exist for a reason worth knowing: at roughly 300px per tile you
 cannot confirm sharpness, and dark or blue-hour frames read as "flat" and get
 unfairly down-rated. So stage one is a cheap triage that throws out the
@@ -376,14 +392,25 @@ do a final 1:1 sharpness pass by eye on the shortlist before you publish.
 ### Measuring instead of arguing
 
 ```bash
-python3 bridge/measure_tilt.py /tmp/render.jpg     # roll and keystone, whole frame
-python3 bridge/find_plumb.py  /tmp/render.jpg      # roll from one vertical structure
+python3 bridge/measure_tilt.py /tmp/render.jpg --references refs.json --grid /tmp/grid.jpg
+python3 bridge/find_plumb.py  /tmp/render.jpg      # candidate vertical structures
 python3 bridge/attention_check.py /tmp/render.jpg  # does the subject win its frame?
 ```
 
-`find_plumb.py` exists because whole-frame tilt estimation averages every edge
-in the picture, so heavy foliage or two parallel water lines can report the
-frame as level while the one tower in it visibly leans. When your eye and the
+A whole-frame tilt estimate averages every edge in the picture, so heavy
+foliage or two parallel water lines can report the frame as level while the one
+tower in it visibly leans. That is why level is measured on **named
+references**: you (or the agent) mark the lines that should be vertical or
+horizontal, and the tool fits exactly those on that exact render. `find_plumb.py`
+only proposes candidate structures; it gives no verdict. Positive angles mean
+clockwise everywhere.
+
+For an actual straighten or crop, use the state-bound geometry workflow
+(`./lrc geometry capture`, `plan`, `apply`, `audit`, or the `geometry_*` MCP
+tools). It refuses to apply a plan to a different photo or a changed state,
+takes a rollback snapshot first, and leaves you a before/after overlay to
+check. It needs the optional `geometry` extra; the walkthrough is
+[bridge/geometry-audit.md](../bridge/geometry-audit.md). When your eye and the
 number disagree, measure the thing your eye is looking at.
 
 ---
@@ -428,7 +455,7 @@ Three ways to fill it, and they combine:
 
    > Seed my photography knowledge base. Research the craft (culling criteria,
    > composition, color and tone, the standard edit order, and the genres I
-   > shoot: travel, street, landscape), then write the `core/`, `genres/` and
+   > shoot: portrait, wildlife, landscape), then write the `core/`, `genres/` and
    > `editing/` cards per `kb/README.md`, all at `confidence: seed`.
 
    Those cards are hypotheses. Practice promotes them or kills them.
@@ -473,17 +500,23 @@ This is a UI step. A shell command cannot start the plug-in for you.
 **`No active photo...`** Select a photo in Lightroom. Most edits act on the
 active (most-selected) photo.
 
-**The first edit did nothing.** Known and expected: the very first edit call
-issued while the photo is sitting in the **Library** module gets eaten by the
-switch to Develop. It reports `applied` and reads back unchanged. Re-issue it.
-More generally, `ok` from the bridge is not proof of a commit, which is why the
-agent reads values back and verifies by render.
+**The first edit did nothing.** Older plug-ins lost the very first edit issued
+while the photo sat in the **Library** module, because the switch to Develop
+ate it. Plug-in 1.5 waits for Develop to be ready and reads absolute slider
+values back, retrying within a bounded window. Relative nudges (`+`, `-`) and
+toggles are never replayed automatically, so re-issue those if one did not
+land. More generally, `ok` from the bridge is not proof of a commit, which is
+why the agent reads values back and verifies by render.
 
-**A mask does not seem to do anything.** AI masks under-apply on creation,
-because the selection is still computing when the values arrive. The fix is to
-re-push with `mask adjust` and check the render, possibly more than once. Also:
-`settings` always reports mask values as 0, so a read-back cannot confirm a
-mask. Only the render can.
+**A mask does not seem to do anything.** `mask create` now waits for Lightroom
+to list a new mask id and returns an error if none appears; masks that need a
+click or region in the UI (range masks, `objects`) end up there. If the mask
+exists but looks too weak, the AI selection was probably still computing when
+the values arrived (common on 15.3 and 15.4, not seen in a 15.6 JPEG test;
+large RAW files are not re-tested yet). The fix is to re-push with
+`mask adjust` and check the render, possibly more than once. Do not trust
+`settings` for mask values: read them with `value local_*` and confirm the
+coverage with a render.
 
 **A preview looks stale.** Use `render`, not `thumb`. `render` is a full export
 through the pipeline and always reflects the current state, including crop and
@@ -500,6 +533,12 @@ every client after the first one disconnected, until it was restarted. Plug-in
 1.3 (release 2.0) rebinds its response port when a client leaves, so
 `./lrc daemon stop` and restarts are safe. If it still happens, restart the
 plug-in from **Plug-in Extras > Claude Bridge: Start / Restart**.
+
+**A command or MCP tool you read about is missing.** You updated the repo but
+Lightroom or your client still runs the old code. Reload the plug-in, run
+`./lrc daemon stop`, and reconnect the MCP client. `./lrc ping` shows the
+plug-in version. The `geometry` commands also need the optional extra
+(`uv pip install -e '.[geometry]'`).
 
 **Contact sheets fail.** `pip3 install --user Pillow`.
 
@@ -528,10 +567,13 @@ because Lightroom finds the region itself. For a fixed placement, build it once
 in the UI, save it as a preset, and have Claude apply the preset.
 
 **Does it use generative AI on my photos?** Not unless you ask. Lightroom's
-Generative Remove, AI Denoise and Generative Fill are available through the
-bridge but are off the default path, partly because Adobe writes AI metadata
-into the result and some platforms label images that carry it. Select-sky and
-select-subject masks are *analytic*, not generative, and carry no such metadata.
+distracting-people removal, AI Denoise, Raw Details, Super Resolution and
+Reflection Removal are available through the bridge but are off the default
+path, partly because Adobe writes AI metadata into the result and some
+platforms label images that carry it. `./lrc ai-state` reports what the SDK can
+see of a photo's AI status, but its coverage is partial, so it cannot certify a
+photo as AI-free. Select-sky and select-subject masks are *analytic*, not
+generative, and carry no such metadata.
 
 **Which Claude model should I use?** For aesthetic judgment, the strongest model
 you have access to. The gap between models is large for culling and grading and

@@ -4,9 +4,9 @@ whole frame's average edge direction.
 
 Why this exists: the whole-frame structure-tensor estimator in measure_tilt.py
 averages every near-vertical edge, so on a landscape with heavy foliage it can
-report -0.64 deg for the frame while the one tall mast in it leans +1.44 deg - a
-lean the eye catches immediately. Such a mast's
-CENTRELINE (midpoint between its two edges, row by row) fits with a 0.25px
+report a small tilt one way while the one tall mast in the frame leans more than
+a degree the other way - a lean the eye catches immediately. Such a mast's
+CENTRELINE (midpoint between its two edges, row by row) fits with a sub-pixel
 residual because a tapered mast is symmetric even though its edges are not
 parallel. That is the measurement that matches what the eye calls "leaning".
 
@@ -18,9 +18,9 @@ usable structure returns nothing instead of a confident wrong number.
 
     python3 bridge/find_plumb.py render.jpg [--min-rows 80] [--max-resid 0.6]
 
-Positive angle = the structure leans right going DOWN, i.e. its TOP tips LEFT.
-Correcting it needs `lrc crop --angle -<value>` -- but always confirm with a
-two-candidate sweep, because the sign convention differs between references.
+Positive angle is clockwise: the TOP tips RIGHT, matching geometry_audit.
+These tracks are unnamed candidates, never a roll/keystone diagnosis. Visually
+identify credible structures, then use the named geometry audit workflow.
 """
 import argparse
 import numpy as np
@@ -94,44 +94,13 @@ def fit_tracks(gray, min_rows=80, max_resid=0.6, band=6.0):
             continue
         p = np.polyfit(ys, xs, 1)
         resid = float(np.std(xs - np.polyval(p, ys)))
-        ang = float(np.degrees(np.arctan(p[0])))
+        ang = -float(np.degrees(np.arctan(p[0])))
         if resid <= max_resid and abs(ang) <= band:
             out.append({"angle": round(ang, 3), "rows": len(ys), "resid": round(resid, 2),
                         "x": round(float(xs.mean())), "y0": int(ys.min()), "y1": int(ys.max())})
     out.sort(key=lambda d: -d["rows"])
     return out
 
-
-def verdict(fits, width, min_tracks=3, half_tol=0.45, max_resid=0.6):
-    """Roll only when structures on BOTH SIDES of the frame lean the same way.
-
-    Track agreement alone is NOT enough: converging verticals from a wide lens
-    produce tightly-agreeing tracks too (A7400073 returned -3.94 deg across 7
-    tracks at std 0.13, and it has no roll at all - it is pure keystone). Under
-    ROLL every vertical in the frame rotates together, so the left-half median
-    and the right-half median match; under KEYSTONE they differ in sign or
-    magnitude. That split is the discriminator (kb: measure_tilt LEFT/RIGHT).
-
-    Validated on a cityscape frame: left tracks (a TV tower, x~572) +1.43,
-    right track (a Flame Tower edge, x~1566) +1.49 -> ROLL +1.44, which matched
-    the hand measurement and the eye. Returns (angle, n, spread) or None.
-    """
-    good = [f for f in fits if f["resid"] <= max_resid and f["rows"] >= 80]
-    if len(good) < min_tracks:
-        return None
-    L = [f["angle"] for f in good if f["x"] < width * 0.5]
-    R = [f["angle"] for f in good if f["x"] >= width * 0.5]
-    if not L or not R:
-        return None
-    ml, mr = float(np.median(L)), float(np.median(R))
-    if abs(ml - mr) > half_tol:
-        return None                      # keystone, or no coherent roll
-    angs = np.array([f["angle"] for f in good])
-    med = float(np.median([ml, mr]))
-    near = angs[np.abs(angs - med) <= 0.6]
-    if len(near) < min_tracks:
-        return None
-    return round(float(np.median(near)), 3), len(near), round(float(abs(ml - mr)), 3)
 
 
 if __name__ == "__main__":
@@ -144,4 +113,4 @@ if __name__ == "__main__":
     fits = fit_tracks(g, a.min_rows, a.max_resid)
     for f in fits[:12]:
         print(f)
-    print("VERDICT:", verdict(fits, g.shape[1]))
+    print("Candidate tracks only. Identify real references and use lrc geometry audit; no level verdict.")

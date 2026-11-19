@@ -5,7 +5,7 @@ knowledge base gives it *taste and memory*: explicit criteria for how to pick
 photos, how to edit them, and, critically, a loop that makes every session
 leave the next session smarter.
 
-**This repo ships the knowledge base EMPTY on purpose.** Photographic taste is
+**The public repository ships the knowledge base EMPTY on purpose.** Photographic taste is
 personal. A KB full of someone else's preferences would fight yours on every
 edit. What ships here is the *contract*: the folder layout, the card format,
 the recall/apply/learn loop, and the tooling. Your cards get written by the
@@ -88,7 +88,7 @@ Types: **rubric** = scoring criteria; **technique** = how/why knowledge;
 - Load the matching cards: always `core/culling-rubric.md` (for culling) or
   `core/edit-workflow.md` (for editing), plus the genre card, plus any
   editing/style cards the task touches. Helper:
-  `python3 bridge/kb.py recall --genres travel,street --task edit` prints the
+  `python3 bridge/kb.py recall --genres landscape,portrait --task edit` prints the
   matching card paths (add `--full` to print contents).
 - `styles/user-taste.md` is ALWAYS loaded for edits once it exists: it is the
   user's accumulated preferences and overrides genre defaults on conflict.
@@ -116,7 +116,7 @@ happened:
   before", "I actually like crushed blacks here"). Capture what, why, and the
   numbers involved.
 - **Surprising outcome**: a starting point from a card was clearly wrong for a
-  legible reason (e.g. "Sony A7 files at ISO 6400 need Luminance NR around 25,
+  legible reason (e.g. "this camera's files at ISO 6400 need Luminance NR around 25,
   the card's 10 left visible chroma noise").
 - **New recipe that worked**: a slider/mask sequence the user approved that no
   card covers.
@@ -127,14 +127,16 @@ Do NOT save: one-off trivia, anything the render already proves each time,
 restatements of existing cards (bump their `evidence` instead), or session
 mechanics (that belongs in CLAUDE.md).
 
-Scaffold: `python3 bridge/kb.py new --title "..." --genres travel --tags wb,night`
+Scaffold: `python3 bridge/kb.py new --title "..." --genres portrait --tags wb,skin`
 creates `learned/YYYY-MM-DD-<slug>.md` from the template. Fill in the
 **Situation / What happened / Rule to carry forward** sections.
 
 Also: when you successfully apply an existing card's guidance and the render
 plus the user confirm it, bump it: `python3 bridge/kb.py bump <card-id>`
 (increments `evidence`; at 3+ promote `confidence` seed->tested, at ~10
-tested->proven).
+tested->proven). Do not count an agent's initial delivery as user approval. If
+later feedback rejects it, retract that delivery's success increment and
+qualify the old recipe. A research corpus is not successful-use evidence.
 
 ### 4. CONSOLIDATE (light pass - when `kb.py stats` says due)
 
@@ -209,7 +211,8 @@ ingesting. Three invariants when moving a file:
   by construction. Cite whatever final path the file landed at.
 - **Keep citations resolvable.** If any card cites a moved file by path,
   update the reference to its final `knowledge/processed/...` path in the same
-  pass (grep `knowledge/` across `kb/` first).
+  pass (grep `knowledge/` across `kb/` first). A moved-but-still-cited file
+  that no longer resolves is a broken provenance link.
 - **Archive, never delete.** The originals are provenance and may be re-mined
   on a deep revision (section 5 re-synthesis reads `knowledge/`). Only move to
   `processed/`; if a drop is only *partly* extracted, leave it in the inbox
@@ -218,19 +221,49 @@ ingesting. Three invariants when moving a file:
 `knowledge/processed/` is excluded from the "what is new to ingest?" scan. When
 looking for un-processed drops, read the top level of `knowledge/` only.
 
+This mirrors how the repo already treats edits as *recipes*: knowledge, like
+edits, is rebuilt cleanly rather than patched blindly.
+
+## Studying reference photographs without inventing evidence
+
+For a requested research expansion, save an original study register in a dated
+folder under `knowledge/processed/`, then rewrite the relevant craft cards.
+
+- Record the exact source page, creator/caption, and an identifiable image.
+  Prefer photographer, estate, museum, official publisher or award-organizer
+  pages. Keep third-party captions distinct from verified attribution.
+- Inspect actual pixels. Search captions and alt text alone do not count.
+  Record inspection method and size limits; count one scene once even when
+  several before/after versions are examined. Do not download reference photos
+  simply to bypass a display limitation.
+- Separate **visible relationship**, **author-disclosed method**, and **our
+  proposed editing transfer**. A finished JPEG cannot reveal exact sliders,
+  RAW headroom, capture exposure or undisclosed retouching.
+- Include contrasting cases: high-key as well as low-key, an isolated hero as
+  well as a meaningful group, a quiet field as well as ordered complexity.
+  Pair every proposed rule with a failure mode or exception.
+- Attach primary research to scientific claims, acknowledge contested methods,
+  and avoid converting dataset correlations into fixed aesthetic laws.
+- Keep source summaries concise, respect quoting limits, and retain links.
+  Newly derived rules start at seed/evidence 0. Do not promote an existing
+  card merely because it acquired more research citations.
+- Merge durable session feedback into active cards and mark fully integrated
+  lessons merged. Keep unresolved version-specific claims explicitly pending;
+  do not erase a backlog by asserting they were validated.
+
 ## Seeding an empty KB
 
 You have three ways to get from zero cards to a working KB. They combine well.
 
 1. **Just work (recommended).** Edit and cull with the skills. Every time you
-   correct the agent ("too warm", "I hate vignettes", "keep the symmetry"), it
+   correct the agent ("too warm", "less clarity on faces", "keep the horizon lower"), it
    writes a lesson into `learned/`. After a handful of sessions, ask it to
    consolidate, and your first real cards appear. This KB is *yours* from the
    first line, which is the whole point.
 2. **Ask for a research seeding pass.** One prompt is enough:
    > Seed my photography knowledge base. Research the craft (culling criteria,
    > composition, color and tone, the standard edit order, and the genres I
-   > shoot: travel, street, landscape), then write the `core/`, `genres/` and
+   > shoot: portrait, wildlife, landscape), then write the `core/`, `genres/` and
    > `editing/` cards per `kb/README.md`, all at `confidence: seed`.
 
    Seed cards are hypotheses, not law. Practice promotes or kills them.

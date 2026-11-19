@@ -16,34 +16,27 @@ from unittest.mock import patch
 from lupa.lua51 import LuaRuntime
 
 from lightroom_bridge import _core
+from test_bridge_upgrade import FIXTURE
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'ClaudeBridge.lrplugin/Bridge.lua').read_text()
 
 
-# Lightroom SDK doubles: just enough for Bridge.lua's top level to load.
-FIXTURE = r'''
-now = 0
-calls = {}
-cat = {}
-function cat:getTargetPhoto() return nil end
-function import(name)
-    if name == 'LrTasks' then return {pcall=pcall, sleep=function(n) now = now + n end} end
-    if name == 'LrDate' then return {currentTime=function() return now end} end
-    if name == 'LrPathUtils' then return {getStandardFilePath=function() return '/nonexistent' end,
-        child=function(a, b) return a .. '/' .. b end} end
-    if name == 'LrApplication' then return {activeCatalog=function() return cat end,
-        versionString=function() return '15.6' end} end
-    return {}
-end
-function require(name) return {VERSION={major=1,minor=3,revision=0}} end
-'''
-
-
 def load_dispatch():
     """Bridge.lua up to the socket server, with a test handler and a token setter."""
     lua = LuaRuntime(unpack_returned_tuples=True)
-    lua.execute(FIXTURE)
+    lua.execute(FIXTURE + r'''
+    function cat:getTargetPhoto() return nil end
+    local baseImport = import
+    function import(name)
+        if name == 'LrPathUtils' then return {getStandardFilePath=function() return '/nonexistent' end,
+            child=function(a, b) return a .. '/' .. b end} end
+        if name == 'LrApplication' then return {activeCatalog=function() return cat end,
+            versionString=function() return '15.6' end} end
+        local ok, value = pcall(baseImport, name); if ok then return value end; return {}
+    end
+    function require(name) return {VERSION={major=1,minor=5,revision=0}} end
+    ''')
     source = SOURCE.split('-- Socket server + main loop', 1)[0]
     exports = lua.execute(source + r'''
     H.echo = function(p) calls.echo = (calls.echo or 0) + 1; return {got = p.value} end
@@ -51,32 +44,6 @@ def load_dispatch():
             setToken = function(t) AUTH_TOKEN = t end}
     ''')
     return lua, exports
-
-
-class PluginSourceTests(unittest.TestCase):
-    def test_lua_compiles_and_never_evaluates_input(self):
-        runtime = LuaRuntime(unpack_returned_tuples=True)
-        for path in (ROOT / 'ClaudeBridge.lrplugin').glob('*.lua'):
-            ok, error = runtime.eval('function(s) local f,e=loadstring(s); return f~=nil,e end')(path.read_text())
-            self.assertTrue(ok, f'{path}: {error}')
-        code = "\n".join(l for l in SOURCE.splitlines() if not l.strip().startswith('--'))
-        self.assertNotIn('loadstring', code)
-
-
-class VersionTests(unittest.TestCase):
-    def test_ping_reports_the_manifest_version(self):
-        lua = LuaRuntime(unpack_returned_tuples=True)
-        lua.execute(FIXTURE)
-        info = LuaRuntime(unpack_returned_tuples=True).execute(
-            (ROOT / 'ClaudeBridge.lrplugin/Info.lua').read_text())
-        v = info.VERSION
-        lua.globals().require = lua.eval(
-            'function(n) return {VERSION={major=%d,minor=%d,revision=%d}} end'
-            % (v.major, v.minor, v.revision))
-        source = SOURCE.split('-- Socket server + main loop', 1)[0]
-        reported = lua.execute(source + '\nreturn PLUGIN_VERSION')
-        self.assertEqual(reported, '%d.%d.%d' % (v.major, v.minor, v.revision))
-        self.assertIn('version   = PLUGIN_VERSION', SOURCE, 'ping must report PLUGIN_VERSION')
 
 
 class JsonDecoderTests(unittest.TestCase):
@@ -487,7 +454,11 @@ class HousekeepingTests(unittest.TestCase):
 
     def make(self, name, age_s, size=1000, now=1_000_000):
         path = os.path.join(self.root, name)
-        Path(path).write_bytes(b"x" * size)
+        if name.startswith("geometry-"):
+            os.makedirs(path)
+            Path(path, "x.jpg").write_bytes(b"x" * size)
+        else:
+            Path(path).write_bytes(b"x" * size)
         os.utime(path, (now - age_s, now - age_s))
         return path
 
@@ -495,16 +466,14 @@ class HousekeepingTests(unittest.TestCase):
         now = 1_000_000
         old = self.make("A1_claude.jpg", 2 * 86400)
         fresh = self.make("A2_claude.jpg", 3600)
+        geo = self.make("geometry-1.5", 2 * 86400)
         other = self.make("notes.txt", 9 * 86400)
-        folder = os.path.join(self.root, "keep-me")
-        os.makedirs(folder)
-        os.utime(folder, (now - 9 * 86400, now - 9 * 86400))
         r = _core.prune_previews(root=self.root, now=now)
-        self.assertEqual(r["removed"], 1)
+        self.assertEqual(r["removed"], 2)
         self.assertFalse(os.path.exists(old))
+        self.assertFalse(os.path.exists(geo))
         self.assertTrue(os.path.exists(fresh))
         self.assertTrue(os.path.exists(other), "unknown files are never touched")
-        self.assertTrue(os.path.isdir(folder), "folders are never touched")
 
     def test_size_cap_evicts_oldest_but_spares_in_flight(self):
         now = 1_000_000

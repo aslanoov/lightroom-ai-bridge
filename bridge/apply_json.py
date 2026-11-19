@@ -4,8 +4,8 @@
 `lrc apply KEY=VALUE` runs every value through cli.autotype(), which only knows
 bool/int/float/str -- so an array like the tone curve arrives as the STRING
 "[0,0,26,17,...]" and Lightroom silently drops it (the response still echoes the
-key, so it looks like it landed). The transport itself is fine: _core.to_lua
-serializes lists and dicts correctly. This script skips autotype and hands
+key, so it looks like it landed). The transport itself is fine: the daemon sends
+JSON, so lists and dicts arrive intact. This script skips autotype and hands
 _core.call a real Python object.
 
 Usage:

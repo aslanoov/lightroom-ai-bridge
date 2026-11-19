@@ -1,5 +1,9 @@
 # Operating the Lightroom bridge (for Claude)
 
+> This file is part of the public project. Keep it generic. Anything about one
+> user (taste, destinations, paths, photo details, session findings about their
+> photos) belongs in `PERSONAL.md` or the knowledge base, never here.
+
 This project edits the user's RAW photos in **Adobe Lightroom Classic** through
 a CLI. Use `./lrc <command>` (wrapper) or `python3 bridge/lrc.py <command>`, or
 plain `lrc <command>` if the package is installed. Add `--raw` for compact JSON.
@@ -13,6 +17,39 @@ hand. Architecture, protocol and SDK gotchas are in `README.md` and
 redistributable); download the Lightroom Classic SDK from Adobe and read
 `API Reference/modules/LrDevelopController.html` before claiming a parameter
 does not exist, and read the PDFs before changing plug-in Lua.
+
+**Personal overlay.** If a `PERSONAL.md` exists at the repo root, read it right
+after this file. It holds your own local rules (paths, destinations, house
+workflow, which cards to load) and wins on conflict. It is personal: keep it out
+of any public fork.
+
+**Versions.** Plug-in 1.5.0 with SDK baseline and minimum Lightroom Classic
+15.3, tested on 15.6. SDK and application versions are independent: do not raise
+`LrSdkVersion` to the application version. The wire protocol is JSON plus a
+per-start token (`~/.claude-lrc-bridge/auth.token`), so the plug-in and the
+daemon must come from the same release. Errors carry a `diagnosis` (port owners,
+handshake state, the fix); read its `hint` before guessing. A busy or stuck
+plug-in fails in about 5 to 12 s, and `./lrc daemon stop` is safe.
+`./lrc capabilities` reports API availability and the documented UI-only gaps.
+
+**Newer controls** (parameters in `docs/COMMAND-REFERENCE.md`): `point-color`
+(global, or `--local --mask-id`), `mask duplicate-invert`, `mask toggle-hidden`,
+`mask component`, `mask delete-empty`, `preset apply --amount 0..200
+--update-ai`, `ai-state`, `update-ai`, `enhance`, `reflection`,
+`review-selection`, and `geometry`. Responses from AI update, Enhance and
+Reflection Removal report a request or state, never proof that processing
+finished: keep the render verification step, and respect the destination's AI
+policy. Feather/Edge, Assisted Culling scores, native Duplicates and Render to
+DNG have no documented SDK 15.3 endpoints; use the Lightroom UI. Lightroom's own
+selection (for example after Assisted Culling) can feed `python3 bridge/cull.py
+triage --native-selection`; stacks are not proof of duplicates.
+
+**Geometry (straighten, perspective, crop) is its own delivery gate.** Use
+`./lrc geometry capture/plan/apply/audit` (MCP `geometry_*`) and follow
+`bridge/geometry-audit.md`: explicit photo UUID, current display coordinates,
+a fresh capture after each transform, named references on both axes. A
+whole-frame texture average, Upright result or slider read-back does not
+certify that a picture is level.
 
 ## Knowledge base: recall -> apply -> learn (kb/)
 
@@ -97,7 +134,7 @@ Extras menu). It is a UI step; do not try to fix it from the shell.
 ./lrc undo  /  ./lrc redo               # responses include canUndo/canRedo
 ./lrc value Exposure   /   ./lrc range Exposure
 ./lrc rating 4 --uuid <id>              # verified writeback, immune to stale selection
-./lrc preset save "Soft Autumn Portrait" --uuid <id> --dry-run   # then without --dry-run;
+./lrc preset save "My Look" --uuid <id> --dry-run   # then without --dry-run;
                                         # UI-visible preset (loads at next LrC restart)
 ./lrc call enhance_state                # is AI Denoise available for the ACTIVE photo?
 ./lrc call denoise amount=50            # non-destructive AI Denoise (RAW yes; JPEG is NOT
@@ -115,14 +152,14 @@ Extras menu). It is a UI step; do not try to fix it from the shell.
 - Edits act on the **active (most-selected) photo**; the plug-in auto-switches
   to the **Develop** module. For multiple photos use `apply ... --targets
   selected`, or `bridge/batch_apply.py` when correctness matters.
-- **The `applied`/`ok` echo is NOT commit confirmation** (three confirmed
-  races): (1) the FIRST edit call while the photo sits in **Library** is
-  silently eaten by the module switch, echoes `applied`, reads back 0, so
-  re-issue it; (2) a render fired right after `set` or `preset apply` can serve
-  the PREVIOUS state, so settle ~3s and confirm with `value <Param>` before
-  rendering; (3) phantom mask creates (see Masking). Never conclude a control is
-  dead without read-back plus settle: a race and a real no-op look identical in
-  renders.
+- **The `applied`/`ok` echo is NOT final confirmation; the render is.** The
+  plug-in waits for Develop and verifies (and retries) absolute numeric slider
+  writes, which covers the old "first edit in Library is eaten" race; relative
+  increments and toggles are never retried. A render fired right after `set` or
+  `preset apply` can still serve the PREVIOUS state, so settle ~3s and confirm
+  with `value <Param>` before rendering. Mask structure can appear before the AI
+  coverage is ready (see Masking). Never conclude a control is dead without
+  read-back plus settle: a race and a real no-op look identical in renders.
 - **The user browsing moves the active photo between commands.** Verify
   `active.uuid` before every mutating call in a long session.
 - `set`, `value` and `mask adjust` take **friendly names** (`Exposure`,
@@ -150,28 +187,32 @@ Extras menu). It is a UI step; do not try to fix it from the shell.
   only): `subject sky background objects people landscape color luminance depth`.
 - Do NOT pass a subtype for `brush`, `gradient` or `radialGradient` (Lightroom
   rejects it).
-- **Phantom creates: `ok` from mask create is NOT proof of creation.** Subtypes
-  needing a region or click in the UI silently create nothing: `rangeMask
-  luminance` and `aiSelection objects` are confirmed, likely all `rangeMask`
-  subtypes and `aiSelection color/depth`. **After every create, confirm with
-  `mask list`** (on 15.6 it reads empty for about 2 s while the AI selection
-  computes: wait and list again before concluding nothing was created). To pull down a blown region a rangeMask cannot reach, use
-  global `Whites` (near-surgical when only that region is at or above 250;
-  measure per-region percentage first).
-- **AI masks under-apply on creation.** The `local_*` values passed to `mask
-  create aiSelection ...` often land weak, because the AI compute is not
-  finished when they fire. Reliable pattern: **create -> `mask adjust
-  local_*=...` to re-push -> verify by render**, and one re-push is a MINIMUM: a
-  no-op render does NOT mean the mask failed, so re-push again with 3 to 5
-  second pauses (budget about three adjusts). A hard test value
-  (`local_Exposure=-1.5`) confirms the mask is live; then dial to taste. Give
-  the create its own call; do not bundle grade, HSL or effects into the same
-  fast `&&` chain right after it, or they get dropped.
-- **Mask VALUE read-back lies; existence read-back works on 15.4+.** `settings`
-  reports mask `local_*` values as `0`, so verify values by **rendering** only.
-  `mask list` returns correct structure (ids, types, subtypes) on 15.4+ (the
-  "always returns []" behavior was 15.3); use it for existence checks and to get
-  ids for `mask select` and `mask delete` (which requires an id).
+- **Creation is verified by a new mask id.** Subtypes needing a region or
+  click in the UI silently create nothing: `rangeMask luminance` and
+  `aiSelection objects` are confirmed, likely all `rangeMask` subtypes and
+  `aiSelection color/depth`. When no new id appears within 10 seconds the
+  create returns an error; run `mask list` before retrying, because the AI may
+  still be computing. If a range needs UI input, define it in the UI and verify
+  the coverage. To pull down a blown region a rangeMask cannot reach, global
+  `Whites` works when its side effects elsewhere are acceptable (measure the
+  per-region percentage first).
+- **AI mask strength on creation.** On Lightroom Classic 15.6 with plug-in 1.5,
+  `mask create aiSelection ... local_*=v` reached full strength on the first
+  call in testing, and the response's read-back matched the render. Older
+  Lightroom versions often under-applied because the AI compute was not done.
+  So: give the create its own call with a hard test value
+  (`local_Exposure=-1.5`), do not chain grade, HSL or effects right after it,
+  settle ~3s and render. If the effect is missing or weaker than the value
+  implies, re-push with `mask adjust local_*=...` (3 to 5 s pauses, about three
+  tries) before concluding the mask found nothing. Large RAW files are less
+  tested: compare a render after one re-push before trusting the first.
+- **Read mask values with `value local_*` or the create/adjust response, not
+  `settings`.** On 15.6 `settings` stores local exposure on a /4 scale
+  (`LocalExposure2012` -0.375 means -1.5 EV; 15.3 read 0). Coverage is verified
+  by **rendering**. `mask list` returns correct structure (ids, types,
+  subtypes) on 15.4+ (the "always returns []" behavior was 15.3); use it for
+  existence checks and to get ids for `mask select` and `mask delete` (which
+  requires an id).
 - **Per-mask color exists; the Color Grading wheels do not apply per mask.** No
   `local_ColorGrade*` or `local_SplitToning*` (Lightroom design). Per-mask color
   is the Color swatch: `local_ToningHue`, `local_ToningSaturation`,
@@ -185,11 +226,13 @@ Extras menu). It is a UI step; do not try to fix it from the shell.
   serialization is write-broken (`applyDevelopSettings` with a hand-built mask
   renders nothing *and* replaces the mask array). Confirmed dead end; do not
   build a "place" command. Geometric masks land at Lightroom's default spot only.
+  For a shaped local burn or dodge, place or refine the brush, gradient or
+  radial in Lightroom's UI when needed, then verify the coverage by render.
 - `mask reset` clears all masks. **Do not probe masks with repeated `undo`** on
   a live edit: undo can over-rewind past the whole edit and redo may not recover
   it. Restore a pre-edit `snapshot-apply` (verified to bring back sliders AND
-  the mask stack), or rebuild via `reset` plus replay (every edit here is a
-  recipe).
+  the mask stack). Do not globally `reset` a live edit just to recover from a
+  probe: delete only the disposable test mask when that is enough.
 - `mask add/subtract/intersect` apply trailing `local_*` values too (plug-in
   1.1.0+), and `mask invert` works without an id on the currently selected mask.
 

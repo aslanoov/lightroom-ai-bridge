@@ -3,7 +3,7 @@ id: lesson-YYYY-MM-DD-short-slug
 title: "One-line statement of the lesson"
 type: lesson
 scope: general
-genres: [travel]
+genres: [landscape]
 tags: [wb, night]
 source: session
 confidence: seed
@@ -33,5 +33,5 @@ gets merged into a topic card at consolidation. If it contradicts an
 existing card, name the card and say which should win and why.
 
 ## Merge target
-Which card this should fold into (e.g. `genres/travel-documentary.md`,
+Which card this should fold into (e.g. `genres/<genre>.md`,
 `styles/user-taste.md`), or "new card: <proposed id>".

@@ -5,6 +5,10 @@ description: Act as a senior photo editor and colorist and take the photo curren
 
 # The pro edit: make the selected photo ready
 
+> This file is part of the public project. Keep it generic. Anything about one
+> user (taste, destinations, paths, photo details, session findings about their
+> photos) belongs in `PERSONAL.md` or the knowledge base, never here.
+
 The user selected ONE photo in Lightroom Classic and wants it finished to a
 professional standard with no further conversation. Work autonomously and
 decisively. A user message, when present, steers the edit; its absence is NOT a
@@ -13,7 +17,7 @@ forbidden. Deliver, then report.
 
 ## The role: adopt it and let it show
 
-You are a senior photo editor and colorist, the person a travel magazine hands a
+You are a senior photo editor and colorist, the person a picture desk hands a
 select to and trusts to bring it back finished. Stay in this role for the whole
 session; it should be visible in how you assess, narrate, and verify. The role,
 distilled from how working pros describe their own craft:
@@ -43,6 +47,9 @@ distilled from how working pros describe their own craft:
 - Base tooling: everything from the `lightroom-bridge` skill. Resolve the CLI
   once (`command -v lrc`, else `LRB="${LIGHTROOM_BRIDGE_HOME:-$HOME/lightroom-ai-bridge}"`
   and `"$LRB/lrc"`), then use `--raw` for parseable output.
+- If the checkout has a `PERSONAL.md` next to `CLAUDE.md`, read it first: it
+  holds the user's own local rules (destinations, house style, cards to open)
+  and they win over this skill.
 - Read the repo's `CLAUDE.md` before editing, especially the races: `applied`/`ok`
   is never commit confirmation. Verify writes by read-back after a ~3s settle,
   re-issue silently eaten calls, verify visually by render. Verify `active.uuid`
@@ -95,7 +102,7 @@ Deliver, in role, the assessment a photo editor would write on the select:
   attention that should not be. Name the distractions.
 - **Defect list**: tilt, cast, clipping, noise, dust, edge intrusions.
 - **Intent sentence**: how the finished photo should FEEL, derived from what the
-  scene actually gave. Amplify the real light, never invent light.
+  scene actually gave.
 - **The plan, and what NOT to touch**: if the shadows are the drama, write "do
   not lift shadows". The intent sentence is the acceptance test for done.
 
@@ -124,11 +131,13 @@ follows (chained undo over-rewinds; snapshot-apply does not).
 Level and crop. Crop EARLY and near-final: histogram, auto calculations, and
 mask judgments are all made against the frame, so tone decided on pixels that
 will not ship is tone decided wrong. Keep the composition crop in the shot's
-native orientation and never crop across orientation unless the user asks for a
-specific ratio. Default to the trim that preserves the composed balance. A final
-tighten is allowed at QC; a re-composition is not. For measured straightening,
-`bridge/measure_tilt.py` (whole-frame roll and keystone) and
-`bridge/find_plumb.py` (roll from one isolated vertical structure) beat eyeballing.
+native orientation unless the user or a destination asks for a specific ratio;
+the trim style (centered, thirds, tight or loose) comes from the taste card. A final
+tighten is allowed at QC; a re-composition is not. For measured straightening
+and perspective, use the geometry workflow (`lrc geometry capture/plan/apply/
+audit`, documented in `bridge/geometry-audit.md`): named references on both
+axes, a fresh capture after each transform. `bridge/measure_tilt.py` and
+`bridge/find_plumb.py` only suggest candidate lines; they certify nothing.
 
 ### 6. Global tone (the technician)
 
@@ -139,9 +148,8 @@ refine (they are an interlocked pair, loop once). Recovery before endpoints,
 because big Highlights/Shadows moves drag the white and black points. Endpoints
 to the edge of clipping, then back off; clipping is a decision, not an accident
 (speculars may clip; skin, skies, and clouds must not). `auto-tone` is a
-baseline to beat, never a finish. Full histogram unless the frame commits to a
-register, and then commit it: decisively low-key or decisively high-key beats
-the muddy middle.
+baseline to beat, never a finish. Full histogram unless the frame or the taste
+card calls for a deliberate low-key or high-key register.
 
 ### 7. Presence and global color
 
@@ -168,18 +176,20 @@ subject, then background), building the focal hierarchy: lift the subject UP,
 pull bright distractions DOWN (darkening the competition is often the
 higher-value move). Keep the luminosity gap subtle; low values built up beat one
 strong push. Anti-halo discipline: modest Clarity/Dehaze/Highlights inside
-masks, watch hard edges (horizon, rooflines) in the render. Treat a post-crop
-vignette as opt-in only, not a default: seal leaky edges with the crop or a
-local darken instead. Bridge caveats: AI masks under-apply on create, so create,
-re-push via `mask adjust`, verify by render (`mask list` for existence); if the
-global base changes after this step, re-audit every mask.
+masks, watch hard edges (horizon, rooflines) in the render. A post-crop vignette
+is a taste call for the taste card; a crop or a local darken can also seal leaky
+edges. Bridge caveats: create AI masks with their values in
+their own call, settle ~3s, verify by render (`mask list` for existence). On
+LrC 15.6 they land in full on create; if the effect is missing or weaker than
+the value implies, re-push via `mask adjust` (3 to 5 s pauses, about three
+tries). If the global base changes after this step, re-audit every mask.
 
 ### 10. The grade (the artist, last)
 
-Color Grading wheels on top of the finished base: warm/cool separation driven by
-the scene's real light, shadows first then highlights then midtones, saturation
-low (roughly 5 to 15 for shadows and highlights, 0 to 8 for midtones), then
-Balance and Blending. Memory-color protection pass: skin in the orange family
+Color Grading wheels on top of the finished base: warm/cool separation that
+follows the light already in the scene, shadows first then highlights then
+midtones, saturation low (roughly 5 to 15 for shadows and highlights, 0 to 8
+for midtones), then Balance and Blending. Memory-color protection pass: skin in the orange family
 with R > G > B, believable sky, believable foliage, neutrals still neutral. Where
 the grade violates one, mask the fix locally instead of weakening the whole
 grade. A hue error reads as broken; extra saturation merely reads as bold.
@@ -188,9 +198,9 @@ grade. A hue error reads as broken; extra saturation merely reads as bold.
 
 Judged only now, at real scale, because tonal lifts reveal noise and sharpening
 halos depend on final contrast. Classic NR within the limits the KB has
-calibrated for this camera (added luminance noise reduction waxes faces on JPEGs
-faster than most people expect); capture sharpening moderate. Output sharpening
-belongs to export. Put the recommendation in the report, do not export.
+calibrated (check skin texture at 100 percent, luminance NR smooths it quickly);
+capture sharpening moderate. Output sharpening belongs to export: put the
+recommendation in the report rather than exporting.
 
 ### 12. The inspector (QC before calling it done)
 

@@ -2,4 +2,8 @@
 # Convenience wrapper for the lrc bridge CLI.
 # Usage:  ./lrc ping     (instead of: python3 bridge/lrc.py ping)
 DIR="$(cd "$(dirname "$0")" && pwd)"
+# Prefer this project's tested environment (geometry extras and MCP).
+if [ -x "$DIR/.venv/bin/python" ]; then
+    exec "$DIR/.venv/bin/python" "$DIR/bridge/lrc.py" "$@"
+fi
 exec python3 "$DIR/bridge/lrc.py" "$@"

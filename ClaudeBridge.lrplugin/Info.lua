@@ -16,7 +16,7 @@ LrPhoto, LrExportSession.
 return {
 
 	LrSdkVersion = 15.3,
-	LrSdkMinimumVersion = 11.0, -- masking API requires 11.0+
+	LrSdkMinimumVersion = 15.3, -- matches the documented/tested API baseline
 
 	LrToolkitIdentifier = 'com.claude.lrbridge',
 	LrPluginName = 'Claude Bridge',
@@ -38,6 +38,6 @@ return {
 		{ title = 'Claude Bridge: Stop', file = 'Stop.lua' },
 	},
 
-	VERSION = { major = 1, minor = 3, revision = 0, build = 1 },
+	VERSION = { major = 1, minor = 5, revision = 0, build = 1 },
 
 }

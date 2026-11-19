@@ -122,7 +122,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("index")
     p = sub.add_parser("recall")
-    p.add_argument("--genres", help="comma-separated, e.g. travel,street")
+    p.add_argument("--genres", help="comma-separated, e.g. landscape,portrait")
     p.add_argument("--task", choices=["cull", "edit"], default="edit")
     p.add_argument("--full", action="store_true", help="print card contents too")
     p = sub.add_parser("new")

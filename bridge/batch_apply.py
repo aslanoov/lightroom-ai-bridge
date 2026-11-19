@@ -2,9 +2,8 @@
 """batch_apply.py -- apply a develop recipe to a LIST of photos, verified per photo.
 
 Why this exists: `lrc apply` targets only `active` or `selected`, and a
-selected-batch apply is known to silently drop keys on SOME photos (kb:
-learned/2026-08-06-selected-batch-apply-can-drop-a-key-on-s.md, and the
-SplitToning/Incremental first-call drop). This walks an explicit uuid list,
+selected-batch apply is known to silently drop keys on SOME photos (seen in
+practice, as is the SplitToning/Incremental first-call drop). This walks an explicit uuid list,
 applies to each photo as the ACTIVE one, reads the settings back, and re-issues
 only the keys that did not land -- so "applied" is never taken on faith.
 

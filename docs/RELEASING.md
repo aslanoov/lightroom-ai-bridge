@@ -3,6 +3,11 @@
 How a version goes from `main` to a published release. Maintainers only; users
 want the [user guide](USER-GUIDE.md).
 
+**Where the steps run.** This repository is published from the maintainer's
+development tree. The changelog and version edits (steps 1 and 2) are made
+there and arrive here as one export; this repository is never edited by hand.
+Everything from step 3 on runs here.
+
 ## Versioning
 
 **One product version** carries everything: the git tag `vX.Y.Z`, the Python

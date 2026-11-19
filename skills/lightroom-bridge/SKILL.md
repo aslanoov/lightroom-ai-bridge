@@ -19,6 +19,10 @@ description: >-
 
 # Lightroom Classic editing via Lightroom AI Bridge
 
+> This file is part of the public project. Keep it generic. Anything about one
+> user (taste, destinations, paths, photo details, session findings about their
+> photos) belongs in `PERSONAL.md` or the knowledge base, never here.
+
 This skill lets you edit and review the user's photos in a **real, running Adobe
 Lightroom Classic** on this Mac. A plug-in ("Claude Bridge") exposes the Develop
 module over a local socket; you drive it with a CLI. Edits are real,
@@ -43,7 +47,9 @@ Below, `lrc` means "whichever of the two forms works here". Pick one at the
 start of the session and stay consistent. Add `--raw` for compact one-line JSON
 (good for parsing). Full reference: the repo's `README.md` and
 `docs/COMMAND-REFERENCE.md`; `CLAUDE.md` in the repo is the same operating
-cheat-sheet in shorter form.
+cheat-sheet in shorter form. If the checkout has a `PERSONAL.md` next to
+`CLAUDE.md`, read it before the first edit: it holds the user's own local
+rules, and they win over this skill.
 
 ## First, every time: connect
 
@@ -88,8 +94,8 @@ The repo carries a self-improving knowledge base at `kb/` (contract:
 you finish**:
 
 ```bash
-python3 "$LRB/bridge/kb.py" recall --genres travel,street --task edit
-python3 "$LRB/bridge/kb.py" new --title "..." --genres travel --tags wb,night
+python3 "$LRB/bridge/kb.py" recall --genres landscape --task edit
+python3 "$LRB/bridge/kb.py" new --title "..." --genres portrait --tags wb,skin
 python3 "$LRB/bridge/kb.py" bump <card-id>     # a card's guidance worked
 ```
 
@@ -152,14 +158,18 @@ lrc mask reset
   for `rangeMask`/`aiSelection`): `subject sky background objects people
   landscape color luminance depth`. Passing a subtype to
   brush/gradient/radialGradient is rejected by Lightroom.
-- **AI masks under-apply on creation.** Reliable pattern: `mask create` ->
-  `mask adjust local_*=...` to re-push the values -> confirm by **render**. One
-  re-push is a minimum; budget up to three with a few seconds between them.
-- **Phantom creates: `ok` is not proof.** Subtypes that need a click in the UI
-  (`rangeMask luminance`, `aiSelection objects`) can create nothing. Confirm
-  existence with `mask list` on LrC 15.4+.
-- **Mask value read-back lies.** `settings` reports mask `local_*` as `0`.
-  Verify mask VALUES by rendering, never by reading them back.
+- **AI mask strength.** Give `mask create aiSelection ... local_*=v` its own
+  call, settle ~3s, confirm by **render**. On LrC 15.6 the values land in full
+  on create; if the effect is missing or weaker than the value implies (older
+  Lightroom, large RAWs), re-push with `mask adjust local_*=...`, a few seconds
+  apart, up to about three times.
+- **Creation is verified by a new mask id.** Subtypes that need a click in the
+  UI (`rangeMask luminance`, `aiSelection objects`) create nothing, and the
+  create returns an error after 10 s without a new id. Check `mask list` before
+  retrying, because the AI may still be computing.
+- **Read mask values with `value local_*` or the command's response**, never
+  from `settings` (it stores them on a different scale). Coverage only shows in
+  a render.
 - **Masks cannot be positioned** at chosen coordinates. Geometric masks land at
   Lightroom's default spot; for a fixed placement, bake it into a Develop preset
   in the UI and use `preset apply`.
@@ -234,11 +244,11 @@ Hard-won rules:
   After exploratory edits on a real photo, leave it in a clean state (restore
   the pre-edit snapshot, or `reset` and re-apply the intended look) and restore
   any metadata you changed (`rating 0`, `flag none`, `label none`).
-- **The `applied`/`ok` echo is NOT commit confirmation.** Three confirmed races:
-  the FIRST edit call while the photo sits in Library is eaten by the module
-  switch (re-issue it); a render fired right after `set`/`preset apply` can
-  serve the PREVIOUS state (settle ~3s, confirm with `value <Param>`); and
-  phantom mask creates. Verify by read-back, then by render.
+- **The `applied`/`ok` echo is NOT final confirmation.** The plug-in waits for
+  Develop and verifies absolute slider writes, but a render fired right after
+  `set`/`preset apply` can serve the PREVIOUS state (settle ~3s, confirm with
+  `value <Param>`), and AI coverage can lag the mask structure. Verify by
+  read-back, then by render.
 - Batch across selected photos with `apply ... --targets selected` (RAW keys
   from `settings`); `wb --targets selected` batches Kelvin WB on RAW/DNG too.
   Single-photo friendly `set` acts on the active photo only. For a verified

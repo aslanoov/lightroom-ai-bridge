@@ -52,8 +52,6 @@ local AUTH_PATH   = LrPathUtils.child(BRIDGE_DIR, 'auth.token')
 local PROTOCOL    = 'json-1'
 local LOG_MAX_BYTES = 5 * 1024 * 1024
 
--- Single source of truth: Info.lua's VERSION (what Plug-in Manager shows).
--- A hard-coded copy here drifted (1.0.0 shipped plug-in 1.2.0 reporting 1.1.0).
 local manifest = require 'Info'
 local version = manifest.VERSION
 local PLUGIN_VERSION = string.format('%d.%d.%d', version.major, version.minor, version.revision)
@@ -438,6 +436,9 @@ local function pickPhoto(p)
 end
 
 local function targetPhotos(scope)
+	if scope ~= 'active' and scope ~= 'selected' and scope ~= 'all_selected' then
+		error('targets must be active or selected')
+	end
 	if scope == 'selected' or scope == 'all_selected' then
 		-- getTargetPhotos() falls back to the ENTIRE filmstrip when nothing is
 		-- selected; require a real selection so a batch edit can't blast every
@@ -461,18 +462,33 @@ local function withWrite(name, fn, timeoutSecs)
 end
 
 local function ensureDevelop()
+	local photo = pickPhoto()
+	local expected = photo:getRawMetadata('uuid')
 	if LrApplicationView.getCurrentModuleName() ~= 'develop' then
 		LrApplicationView.switchToModule('develop')
-		LrTasks.sleep(0.4)
+		local started, settled = LrDate.currentTime(), false
+		repeat
+			LrTasks.sleep(0.2)
+			local ready, exposure = LrTasks.pcall(function() return LrDevelopController.getValue('Exposure') end)
+			if LrApplicationView.getCurrentModuleName() == 'develop' and ready and type(exposure) == 'number' then
+				settled = true
+				break
+			end
+		until LrDate.currentTime() - started > 5
+		if not settled then error('Develop module did not become ready') end
+		LrTasks.sleep(0.3)
 	end
+	if pickPhoto():getRawMetadata('uuid') ~= expected then error('Active photo changed while opening Develop') end
 end
 
 -- Apply a set of friendly Develop parameters to the current photo using the
 -- interactive controller (handles process-version mapping automatically).
 local function applyDevelopValues(values, withClipping)
 	ensureDevelop()
+	local expectedPhoto = pickPhoto():getRawMetadata('uuid')
 	local applied = {}
 	for k, v in pairs(values) do
+		if pickPhoto():getRawMetadata('uuid') ~= expectedPhoto then error('Active photo changed during slider update') end
 		if v == '+' then
 			LrDevelopController.increment(k)
 		elseif v == '-' then
@@ -488,15 +504,35 @@ local function applyDevelopValues(values, withClipping)
 			end
 		end
 		local ok, nv = LrTasks.pcall(function() return LrDevelopController.getValue(k) end)
-		applied[k] = ok and nv or v
+		if not ok or nv == nil then error('Cannot read back Develop parameter: ' .. k) end
+		-- Only retry absolute values: increments/toggles must never be replayed.
+		local wanted = tonumber(v)
+		if wanted and type(nv) == 'number' then
+			local lo, hi = LrDevelopController.getRange(k)
+			if lo and hi then wanted = math.max(lo, math.min(hi, wanted)) end
+			for attempt = 1, 3 do
+				if type(nv) == 'number' and math.abs(nv - wanted) < 0.0001 then break end
+				LrTasks.sleep(0.25)
+				if pickPhoto():getRawMetadata('uuid') ~= expectedPhoto then error('Active photo changed during slider verification') end
+				LrDevelopController.setValue(k, wanted, withClipping and true or false)
+				nv = LrDevelopController.getValue(k)
+			end
+			if type(nv) ~= 'number' or math.abs(nv - wanted) >= 0.0001 then
+				error('Develop value did not settle: ' .. k .. ' (read back ' .. tostring(nv) .. ')')
+			end
+		end
+		applied[k] = nv
 	end
 	return applied
 end
 
 local function safeGetAllMasks()
 	local ok, m = LrTasks.pcall(function() return LrDevelopController.getAllMasks() end)
-	if ok then return m end
-	return nil
+	if not ok then error('Mask read-back failed: ' .. tostring(m)) end
+	-- Lightroom 15.6 returns nil for no masks and transiently during AI creation.
+	if m == nil then return {} end
+	if type(m) ~= 'table' then error('Mask read-back returned no structure') end
+	return m
 end
 
 -- selectMask / invertMask / deleteMask are documented to require the masking
@@ -530,6 +566,8 @@ function H.ping(p)
 		plugin    = 'Claude Bridge',
 		version   = PLUGIN_VERSION,
 		protocol  = PROTOCOL,
+		pluginPath = _PLUGIN.path,
+		sdk = manifest.LrSdkVersion,
 		lightroom = LrApplication.versionString(),
 		module    = LrApplicationView.getCurrentModuleName(),
 		catalog   = cat:getPath(),
@@ -562,6 +600,82 @@ end
 
 function H.get_settings(p)
 	return pickPhoto(p):getDevelopSettings()
+end
+
+-- Geometry writes bind to a photo object, never the moving UI selection. The
+-- caller supplies the complete captured Develop state as an optimistic lock.
+-- This also rejects stale mask/lens/profile edits that invalidate its render.
+local function geometryEqual(a, b)
+	if type(a) ~= type(b) then return false end
+	if type(a) == 'number' then return math.abs(a - b) < 0.0000001 end
+	if type(a) ~= 'table' then return a == b end
+	for k, v in pairs(a) do if not geometryEqual(v, b[k]) then return false end end
+	for k, v in pairs(b) do if a[k] == nil then return false end end
+	return true
+end
+
+local GEOMETRY_RANGES = {
+	CropLeft={0,1}, CropTop={0,1}, CropRight={0,1}, CropBottom={0,1},
+	CropAngle={-45,45}, PerspectiveVertical={-100,100}, PerspectiveHorizontal={-100,100},
+}
+
+function H.geometry_state(p)
+	if not p.uuid then error('geometry_state: explicit uuid required') end
+	local ph = pickPhoto(p)
+	if ph:getRawMetadata('isVideo') then error('geometry_state: photos only') end
+	return { uuid=p.uuid, settings=ph:getDevelopSettings(), isVirtualCopy=ph:getRawMetadata('isVirtualCopy'),
+		dimensions=ph:getRawMetadata('dimensions'),
+		croppedDimensions=ph:getRawMetadata('croppedDimensions'),
+		sourceWidth=ph:getRawMetadata('width'), sourceHeight=ph:getRawMetadata('height'),
+		catalog=catalog():getPath(), lightroom=LrApplication.versionString(), plugin=PLUGIN_VERSION }
+end
+
+function H.geometry_apply(p)
+	if type(p.catalog) ~= 'string' or p.catalog ~= catalog():getPath() then
+		error('geometry_apply: catalog changed; recapture first')
+	end
+	if not p.uuid or type(p.expected) ~= 'table' or next(p.expected) == nil then
+		error('geometry_apply: uuid and full expected Develop state required')
+	end
+	if type(p.settings) ~= 'table' or next(p.settings) == nil then
+		error('geometry_apply: nonempty geometry settings required')
+	end
+	if type(p.snapshot) ~= 'string' or p.snapshot == '' then
+		error('geometry_apply: unique rollback snapshot name required')
+	end
+	local ph = pickPhoto(p)
+	if ph:getRawMetadata('isVideo') then error('geometry_apply: photos only') end
+	local nextState = {CropLeft=0, CropTop=0, CropRight=1, CropBottom=1}
+	for k,v in pairs(p.expected) do nextState[k]=v end
+	for k,v in pairs(p.settings) do
+		local range = GEOMETRY_RANGES[k]
+		if not range or type(v) ~= 'number' or v ~= v or v < range[1] or v > range[2] then
+			error('geometry_apply: invalid geometry key/value ' .. tostring(k))
+		end
+		nextState[k]=v
+	end
+	if not (nextState.CropLeft < nextState.CropRight and nextState.CropTop < nextState.CropBottom) then
+		error('geometry_apply: invalid crop bounds')
+	end
+	withWrite('Claude: verified geometry', function()
+		if catalog():getPath() ~= p.catalog then error('geometry_apply: catalog changed before write') end
+		if not geometryEqual(ph:getDevelopSettings(), p.expected) then
+			error('geometry_apply: stale capture; Develop settings changed, recapture first')
+		end
+		if not ph:createDevelopSnapshot(p.snapshot, false) then
+			error('geometry_apply: snapshot name already exists; refusing to overwrite')
+		end
+		ph:applyDevelopSettings(p.settings, 'Claude: geometry')
+	end, 30)
+	-- The asynchronous rendering pipeline remains a separate verification step.
+	LrTasks.sleep(0.5)
+	local actual = ph:getDevelopSettings()
+	local verified = true
+	for k,v in pairs(p.settings) do
+		if type(actual[k]) ~= 'number' or math.abs(actual[k]-v) > 0.00001 then verified=false end
+	end
+	return {uuid=p.uuid, snapshot=p.snapshot, readbackVerified=verified,
+		settings=actual, renderRequired=true}
 end
 
 -- Capture / EXIF metadata for the target photo (active, or by uuid). Each field
@@ -758,28 +872,8 @@ function H.enhance_state(p)
 end
 
 function H.denoise(p)
-	-- Non-destructive AI Denoise on the ACTIVE photo (SDK 15.3+ setEnhance).
-	-- Params: amount 1..100 (default 50), enable (default true; false removes).
-	ensureDevelop()
-	local amount = tonumber(p.amount) or 50
-	if amount < 1 then amount = 1 elseif amount > 100 then amount = 100 end
-	local enable = (p.enable ~= false)
-	local ok0, st0 = LrTasks.pcall(function() return LrDevelopController.getEnhancePanelState() end)
-	if ok0 and type(st0) == 'table' and st0.denoiseEnabled == false then
-		error('denoise: not available for this photo (denoiseEnabled=false'
-			.. (st0.denoiseInfoText and st0.denoiseInfoText ~= '' and ('; ' .. tostring(st0.denoiseInfoText)) or '')
-			.. ')')
-	end
-	if enable and ok0 and type(st0) == 'table' and st0.denoiseState == true then
-		LrDevelopController.changeDenoiseAmount(amount) -- already on: adjust amount only
-	else
-		LrDevelopController.setEnhance('denoise', enable, amount)
-	end
-	LrTasks.sleep(0.5)
-	local ok1, st1 = LrTasks.pcall(function() return LrDevelopController.getEnhancePanelState() end)
-	local r = { requested = { enable = enable, amount = amount } }
-	if ok1 and type(st1) == 'table' then r.state = st1 end
-	return r
+	-- Backward-compatible command, with the same validation/status as Enhance.
+	return H.enhance({feature = 'denoise', amount = p.amount, enable = p.enable})
 end
 
 function H.remove_people(p)
@@ -825,9 +919,23 @@ end
 
 function H.mask_create(p)
 	if not p.type then error('mask_create: type required (brush|gradient|radialGradient|rangeMask|aiSelection)') end
-	ensureDevelop()
+	ensureMaskingTool()
+	local before = {}
+	for _, mask in pairs(safeGetAllMasks()) do before[mask.ID or mask.id] = true end
 	LrDevelopController.createNewMask(p.type, p.subtype)
-	local r = {}
+	local started, created = LrDate.currentTime(), nil
+	repeat
+		LrTasks.sleep(0.2)
+		for _, mask in pairs(safeGetAllMasks()) do
+			local id = mask.ID or mask.id
+			if id and not before[id] then created = id; break end
+		end
+	until created or LrDate.currentTime() - started >= 10
+	if not created then
+		error('No new mask observed. The subtype may require UI input or still be computing; inspect mask_list before retrying.')
+	end
+	LrDevelopController.selectMask(created)
+	local r = { createdId = created, verification = 'structure_verified; render_required' }
 	if p.values and next(p.values) ~= nil then r.adjusted = applyDevelopValues(p.values) end
 	r.masks = safeGetAllMasks()
 	return r
@@ -866,13 +974,23 @@ end
 function H.mask_adjust(p)
 	local values = p.values or {}
 	if next(values) == nil then error('mask_adjust: values required (e.g. {local_Exposure=0.5})') end
-	ensureDevelop()
+	ensureMaskingTool()
+	if p.id then
+		local found = false
+		for _, mask in pairs(safeGetAllMasks()) do if (mask.ID or mask.id) == p.id then found = true end end
+		if not found then error('Unknown mask id: ' .. tostring(p.id)) end
+		LrDevelopController.selectMask(p.id)
+		if LrDevelopController.getSelectedMask() ~= p.id then error('Mask selection did not settle') end
+	end
+	local selected = LrDevelopController.getSelectedMask()
+	if type(selected) ~= 'string' or selected == '' then error('No mask selected') end
 	return { adjusted = applyDevelopValues(values) }
 end
 
 function H.mask_list(p)
-	ensureDevelop()
-	return { masks = safeGetAllMasks() }
+	ensureMaskingTool()
+	return { masks = safeGetAllMasks(), selectedId = LrDevelopController.getSelectedMask(),
+		verification = 'structure_only; render to verify visual effect' }
 end
 
 function H.mask_select(p)
@@ -928,6 +1046,13 @@ end
 
 function H.preset_apply(p)
 	if not p.name and not p.uuid then error('preset_apply: name or uuid required') end
+	local amount = tonumber(p.amount or 100)
+	if not amount or amount ~= amount or amount < 0 or amount > 200 or amount ~= math.floor(amount) then
+		error('preset_apply: amount must be an integer in 0..200')
+	end
+	if p.updateAISettings ~= nil and type(p.updateAISettings) ~= 'boolean' then
+		error('preset_apply: updateAISettings must be boolean')
+	end
 	local target
 	if p.uuid then
 		local ok, pr = LrTasks.pcall(function() return LrApplication.developPresetByUuid(p.uuid) end)
@@ -948,9 +1073,11 @@ function H.preset_apply(p)
 	if not target then error('preset not found: ' .. tostring(p.name or p.uuid)) end
 	local photos = targetPhotos(p.targets or 'active')
 	withWrite('Claude: apply preset', function()
-		for _, ph in ipairs(photos) do ph:applyDevelopPreset(target) end
+		for _, ph in ipairs(photos) do ph:applyDevelopPreset(target, nil, amount, p.updateAISettings == true) end
 	end, 30)
-	return { applied = target:getName(), count = #photos }
+	return { applied = target:getName(), count = #photos, amount = amount,
+		updateAISettings = p.updateAISettings == true, completion = 'not_verified',
+		nextStep = 'Read back settings and render; AI processing can continue in the background.' }
 end
 
 --------------------------------------------------- Selection / navigation -----
@@ -1148,10 +1275,14 @@ function H.render(p)
 	local photo = pickPhoto(p)
 	local size = tonumber(p.size) or 2048
 	local quality = tonumber(p.quality) or 0.85
-	LrFileUtils.createAllDirectories(PREVIEW_DIR)
+	local destination = PREVIEW_DIR
+	if p.unique then
+		destination = LrFileUtils.chooseUniqueFileName(LrPathUtils.child(PREVIEW_DIR, 'geometry-' .. tostring(LrDate.currentTime())))
+	end
+	LrFileUtils.createAllDirectories(destination)
 	local settings = {
 		LR_export_destinationType       = 'specificFolder',
-		LR_export_destinationPathPrefix = PREVIEW_DIR,
+		LR_export_destinationPathPrefix = destination,
 		LR_export_useSubfolder          = false,
 		LR_collisionHandling            = 'overwrite',
 		LR_format                       = 'JPEG',
@@ -1221,6 +1352,373 @@ function H.render(p)
 	if not outPath then error('render failed: ' .. tostring(failMsg)) end
 	return { path = outPath, requestedSize = size, quality = quality }
 end
+
+-- State-bound export. A later render cannot overwrite this unique image.
+function H.geometry_capture(p)
+	local before = H.geometry_state(p)
+	local rendered = H.render {uuid=p.uuid, size=p.size, timeout=p.timeout, unique=true}
+	local after = H.geometry_state(p)
+	if before.catalog ~= after.catalog or not geometryEqual(before.settings, after.settings) then
+		error('geometry_capture: Develop settings changed during export; recapture')
+	end
+	return {state=after, image=rendered.path}
+end
+
+-- BEGIN SDK FEATURE MODULE
+local sdkFeatures = (function()
+-- SDK 15.3 additions. Keep documented API support separate from UI features.
+local D = import 'LrDevelopController'
+local Tasks = import 'LrTasks'
+local App = import 'LrApplication'
+local Date = import 'LrDate'
+
+local M = {}
+
+local function api(name)
+	if type(D[name]) ~= 'function' then
+		error('Unsupported SDK API: LrDevelopController.' .. name)
+	end
+	return D[name]
+end
+
+local function number(value, name, low, high, default)
+	if value == nil then value = default end
+	local n = tonumber(value)
+	if not n or n ~= n or n < low or n > high then
+		error(name .. ' must be a finite number in ' .. low .. '..' .. high)
+	end
+	return n
+end
+
+local function boolean(value, name, default)
+	if value == nil then return default end
+	if type(value) ~= 'boolean' then error(name .. ' must be boolean') end
+	return value
+end
+
+local function copy(value)
+	if type(value) ~= 'table' then return value end
+	local out = {}
+	for k, v in pairs(value) do out[k] = copy(v) end
+	return out
+end
+
+local swatchLimits = {
+	SrcHue = {0, 6}, SrcSat = {0, 1}, SrcLum = {0, 1},
+	HueShift = {-1, 1}, SatScale = {-1, 1}, LumScale = {-1, 1},
+	Variance = {-1, 1}, RangeAmount = {0, 1},
+}
+local rangeKeys = {'LowerNone', 'LowerFull', 'UpperFull', 'UpperNone'}
+
+local function validateSwatch(input, existing)
+	if type(input) ~= 'table' or next(input) == nil then error('swatch must be a non-empty object') end
+	local out = copy(existing or {})
+	for key, value in pairs(input) do
+		local limits = swatchLimits[key]
+		if limits then
+			out[key] = number(value, key, limits[1], limits[2])
+		elseif key == 'HueRange' or key == 'SatRange' or key == 'LumRange' then
+			if type(value) ~= 'table' then error(key .. ' must be an object') end
+			local range = copy(out[key] or {})
+			for k, v in pairs(value) do
+				local valid = false
+				for _, allowed in ipairs(rangeKeys) do if k == allowed then valid = true end end
+				if not valid then error('Unknown range field: ' .. tostring(k)) end
+				range[k] = number(v, key .. '.' .. k, 0, 1)
+			end
+			local prev = 0
+			for _, k in ipairs(rangeKeys) do
+				local n = number(range[k], key .. '.' .. k, 0, 1)
+				if n < prev then error(key .. ' limits must be ordered') end
+				prev = n
+			end
+			out[key] = range
+		else
+			error('Unknown Point Color field: ' .. tostring(key))
+		end
+	end
+	for _, k in ipairs({'SrcHue', 'SrcSat', 'SrcLum'}) do
+		if out[k] == nil then error('swatch requires ' .. k) end
+	end
+	return out
+end
+
+function M.register(H, ctx)
+	local function maskTarget(id, keepSelection)
+		ctx.ensureMaskingTool()
+		local masks = ctx.getMasks()
+		if id then
+			local found = false
+			for _, mask in pairs(masks) do if (mask.ID or mask.id) == id then found = true end end
+			if not found then error('Unknown mask id: ' .. tostring(id)) end
+			if keepSelection then return id end -- selecting a hidden mask unhides it in Lightroom
+			api('selectMask')(id)
+		end
+		local selected = api('getSelectedMask')()
+		if type(selected) ~= 'string' or selected == '' then error('No mask selected') end
+		if id and selected ~= id then error('Mask selection did not settle') end
+		return selected
+	end
+
+	local function pointColors(isLocal)
+		local values = D.getValue(isLocal and 'local_PointColors' or 'PointColors')
+		if values == nil then return {} end -- empty local Point Color state on Lightroom 15.6
+		if type(values) ~= 'table' then error('Point Color read-back is unavailable') end
+		return values
+	end
+
+	local function ensureRemoveTool()
+		ctx.ensureDevelop()
+		if api('getSelectedTool')() ~= 'dust' then
+			api('selectTool')('dust')
+			Tasks.sleep(0.3)
+		end
+	end
+
+	function H.capabilities(p)
+		local names = {'addPointColorSwatch', 'updateSelectedPointColorSwatch',
+			'deletePointColorSwatch', 'selectPointColorSwatch', 'getSelectedPointColorSwatchIndex',
+			'duplicateAndInvertMask', 'toggleHideMask', 'selectMaskTool', 'deleteMaskTool',
+			'toggleHideMaskTool', 'toggleInvertMaskTool', 'getAllMasks', 'setEnhance',
+			'getEnhancePanelState', 'getReflectionRemovalPanelState', 'toggleReflectionRemoval',
+			'changeReflectionRemovalAmount', 'changeReflectionRemovalQuality', 'hasFilterWithName'}
+		local available = {}
+		for _, name in ipairs(names) do available[name] = type(D[name]) == 'function' end
+		local cat = ctx.catalog()
+		available.updateAISettings = type(cat.updateAISettings) == 'function'
+		available.deleteAllEmptyMasks = type(cat.deleteAllEmptyMasks) == 'function'
+		return {
+			lightroom = App.versionString(), plugin = ctx.version, sdk = 15.3, minimumSdk = 15.3,
+			apis = available,
+			uiOnly = {
+				maskFeatherEdge = 'Introduced in Lightroom 15.5; no documented SDK 15.3 control. Use Lightroom UI.',
+				assistedCullingScores = 'No documented SDK 15.3 access to native focus/eye scores. Use native Assisted Culling, then review_selection.',
+				nativeDuplicateDetection = 'No documented SDK 15.3 trigger/results API. Use native Duplicates view, then review_selection.',
+				renderToDng = 'No documented SDK 15.3 Render to DNG API. Ordinary DNG export is not equivalent.',
+			},
+		}
+	end
+
+	function H.point_color(p)
+		local op = p.operation or 'list'
+		local actions = {list = true, add = true, update = true, select = true, delete = true, clear = true}
+		if not actions[op] then error('Unknown Point Color operation: ' .. tostring(op)) end
+		local isLocal = boolean(p.isLocal, 'isLocal', false)
+		if p.maskId and not isLocal then error('maskId requires isLocal=true') end
+		local index
+		if p.index ~= nil then
+			index = number(p.index, 'index', 1, 8)
+			if index ~= math.floor(index) then error('index must be an integer') end
+		end
+		if (op == 'select' or op == 'delete') and not index then error(op .. ' requires index') end
+		if op == 'add' then validateSwatch(p.swatch) end -- fail before changing UI
+		ctx.ensureDevelop()
+		local maskId
+		if isLocal then maskId = maskTarget(p.maskId) end
+		local before = pointColors(isLocal)
+		local beforeCount = #before
+		if index and not before[index] then error('No Point Color swatch at index ' .. index) end
+		if op == 'update' then
+			index = index or api('getSelectedPointColorSwatchIndex')(isLocal)
+			if not index or not before[index] then error('No Point Color swatch selected') end
+			local swatch = validateSwatch(p.swatch, before[index])
+			api('selectPointColorSwatch')(index, isLocal)
+			local ok, err = api('updateSelectedPointColorSwatch')(swatch, isLocal)
+			if ok ~= true then error('Point Color update failed: ' .. tostring(err)) end
+		elseif op == 'add' then
+			local ok, err = api('addPointColorSwatch')(validateSwatch(p.swatch), isLocal)
+			if ok ~= true then error('Point Color add failed: ' .. tostring(err)) end
+		elseif op == 'select' then
+			api('selectPointColorSwatch')(index, isLocal)
+		elseif op == 'delete' or op == 'clear' then
+			if api('deletePointColorSwatch')(op == 'clear', index or 1, isLocal) ~= true then
+				error('Point Color deletion failed')
+			end
+		end
+		if op ~= 'list' then Tasks.sleep(0.2) end
+		local swatches = pointColors(isLocal)
+		local expectedCount = op == 'add' and (beforeCount + 1)
+			or op == 'delete' and (beforeCount - 1) or op == 'clear' and 0 or beforeCount
+		local started = Date.currentTime()
+		while #swatches ~= expectedCount and Date.currentTime() - started < 2 do
+			Tasks.sleep(0.2)
+			swatches = pointColors(isLocal)
+		end
+		if #swatches ~= expectedCount then error('Point Color count did not settle; inspect before retrying') end
+		local selected = api('getSelectedPointColorSwatchIndex')(isLocal)
+		if op == 'select' and selected ~= index then error('Point Color selection did not settle') end
+		return {operation = op, isLocal = isLocal, maskId = maskId, swatches = swatches,
+			selectedIndex = selected, count = #swatches, verification = 'sdk_readback; render to verify visual effect'}
+	end
+
+	function H.mask_duplicate_invert(p)
+		local id = maskTarget(p.id)
+		if api('duplicateAndInvertMask')(id) ~= true then error('Mask duplicate/invert failed') end
+		Tasks.sleep(0.2)
+		return {sourceId = id, selectedId = D.getSelectedMask(), masks = ctx.getMasks()}
+	end
+
+	function H.mask_toggle_hidden(p)
+		local id = maskTarget(p.id, true)
+		api('toggleHideMask')(id)
+		return {toggledId = id, masks = ctx.getMasks(), verification = 'render_required'}
+	end
+
+	function H.mask_tool(p)
+		local actions = {select = 'selectMaskTool', delete = 'deleteMaskTool',
+			toggle_hidden = 'toggleHideMaskTool', invert = 'toggleInvertMaskTool'}
+		local name = actions[p.operation]
+		if not name then error('mask_tool: operation must be select|delete|toggle_hidden|invert') end
+		if type(p.toolId) ~= 'string' or p.toolId == '' then error('mask_tool: toolId required') end
+		local id = maskTarget(p.maskId)
+		local found = false
+		for _, mask in pairs(ctx.getMasks()) do
+			if (mask.ID or mask.id) == id then
+				for _, tool in pairs(mask.Tools or mask.tools or {}) do
+					if (tool.ID or tool.id) == p.toolId then found = true end
+				end
+			end
+		end
+		if not found then error('Mask tool does not belong to selected mask: ' .. p.toolId) end
+		api(name)(p.toolId)
+		return {maskId = id, toolId = p.toolId, operation = p.operation, masks = ctx.getMasks()}
+	end
+
+	function H.mask_delete_empty(p)
+		local photos = ctx.targetPhotos(p.targets or 'active')
+		local cat = ctx.catalog()
+		if type(cat.deleteAllEmptyMasks) ~= 'function' then error('deleteAllEmptyMasks is unavailable') end
+		ctx.withWrite('Claude: delete empty masks', function() cat:deleteAllEmptyMasks(photos) end)
+		return {photosProcessed = #photos, verification = 'render_required'}
+	end
+
+	function H.update_ai_settings(p)
+		local photos = ctx.targetPhotos(p.targets or 'active')
+		local cat = ctx.catalog()
+		if type(cat.updateAISettings) ~= 'function' then error('updateAISettings is unavailable') end
+		ctx.withWrite('Claude: update AI settings', function() cat:updateAISettings(photos) end)
+		-- SDK offers no documented all-AI-jobs completion callback. Do not call this done.
+		return {requested = true, count = #photos, completion = 'not_verified',
+			nextStep = 'Check AI Edit Status in Lightroom and render before using the result.'}
+	end
+
+	function H.ai_state(p)
+		ctx.ensureDevelop()
+		local out = {scope = 'active', completeCoverage = false,
+			note = 'SDK status is partial; not proof of AI-free content or completion of all AI jobs.'}
+		local originalTool = api('getSelectedTool')()
+		for key, fn in pairs({enhance = 'getEnhancePanelState', reflection = 'getReflectionRemovalPanelState'}) do
+			local ok, value = Tasks.pcall(function()
+				if key == 'reflection' then ensureRemoveTool() end
+				return api(fn)()
+			end)
+			out[key] = ok and value or {error = tostring(value)}
+		end
+		if originalTool then api('selectTool')(originalTool) end
+		out.filters = {}
+		for _, name in ipairs({'enhance', 'dereflect', 'remove_people'}) do
+			local ok, value = Tasks.pcall(function() return api('hasFilterWithName')(name) end)
+			out.filters[name] = ok and {present = value} or {error = tostring(value)}
+		end
+		return out
+	end
+
+	function H.enhance(p)
+		local feature = p.feature or 'denoise'
+		local keys = {denoise = 'denoise', rawDetails = 'rawDetails', superRes = 'superRes'}
+		if not keys[feature] then error('feature must be denoise|rawDetails|superRes') end
+		local enable = boolean(p.enable, 'enable', true)
+		local amount = number(p.amount, 'amount', 1, 100, 50)
+		ctx.ensureDevelop()
+		local state = api('getEnhancePanelState')()
+		if enable and state[feature .. 'Enabled'] == false then
+			error('Enhance unavailable: ' .. tostring(state[feature .. 'InfoText'] or feature))
+		end
+		if feature == 'denoise' and enable and state.denoiseState == true then
+			api('changeDenoiseAmount')(amount)
+		elseif state[feature .. 'State'] ~= enable then
+			api('setEnhance')(feature, enable, amount)
+		end
+		Tasks.sleep(0.5)
+		return {requested = {feature = feature, enable = enable, amount = amount},
+			state = D.getEnhancePanelState(), completion = 'not_verified', verification = 'render_required'}
+	end
+
+	function H.reflection_state(p)
+		ensureRemoveTool()
+		return api('getReflectionRemovalPanelState')()
+	end
+
+	function H.reflection_removal(p)
+		local enable = boolean(p.enable, 'enable', true)
+		local timeout = number(p.timeout, 'timeout', 1, 600, 90)
+		local amount = p.amount ~= nil and number(p.amount, 'amount', -100, 100) or nil
+		local quality = p.quality
+		if quality and quality ~= 'preview' and quality ~= 'standard' and quality ~= 'best' then
+			error('quality must be preview|standard|best')
+		end
+		ensureRemoveTool()
+		local initial = api('getReflectionRemovalPanelState')()
+		if enable and (initial.isSupported == false or initial.enabled == false) then
+			error('Reflection Removal is unavailable for this photo')
+		end
+		local done, asynchronous = false, false
+		local function completed() done = true end
+		if initial.checkboxState ~= enable then
+			asynchronous = true
+			api('toggleReflectionRemoval')(amount or initial.amount or 100, quality or initial.quality or 'standard', completed)
+		elseif enable then
+			if amount ~= nil then api('changeReflectionRemovalAmount')(amount) end
+			if quality and quality ~= initial.quality then
+				asynchronous = true
+				api('changeReflectionRemovalQuality')(quality, completed)
+			end
+		end
+		local started = Date.currentTime()
+		while asynchronous and not done and Date.currentTime() - started < timeout do Tasks.sleep(0.25) end
+		local state = D.getReflectionRemovalPanelState()
+		return {requested = {enable = enable, amount = amount, quality = quality}, state = state,
+			callbackFired = done, timedOut = asynchronous and not done,
+			completion = asynchronous and (done and 'callback' or 'pending') or 'no_async_job',
+			verification = 'render_required'}
+	end
+
+	function H.review_selection(p)
+		-- Native culling/duplicate detection must be initiated in the Lightroom UI.
+		-- Consume its explicitly selected results without inventing unavailable scores.
+		local photos = ctx.targetPhotos('selected')
+		local out = {}
+		for _, photo in ipairs(photos) do
+			local row = ctx.photoInfo(photo)
+			for _, key in ipairs({'isVirtualCopy', 'masterPhoto', 'isInStackInFolder',
+				'stackPositionInFolder', 'stackInFolderMembers'}) do
+				local ok, value = Tasks.pcall(function() return photo:getRawMetadata(key) end)
+				if ok then
+					if key == 'masterPhoto' and value then value = value:getRawMetadata('uuid') end
+					if key == 'stackInFolderMembers' and type(value) == 'table' then
+						local ids = {}
+						for _, member in ipairs(value) do ids[#ids + 1] = member:getRawMetadata('uuid') end
+						value = ids
+					end
+					row[key] = value
+				end
+			end
+			out[#out + 1] = row
+		end
+		return {count = #out, photos = out, nativeScoresAvailable = false,
+			note = 'Selection and folder-stack metadata only. Stacks are not proof of duplicate content.'}
+	end
+end
+
+return M
+
+end)()
+-- END SDK FEATURE MODULE
+sdkFeatures.register(H, {
+	ensureDevelop = ensureDevelop, ensureMaskingTool = ensureMaskingTool,
+	getMasks = safeGetAllMasks, catalog = catalog, targetPhotos = targetPhotos,
+	withWrite = withWrite, photoInfo = photoInfo, version = PLUGIN_VERSION,
+})
 
 function H.help(p)
 	local cmds = {}

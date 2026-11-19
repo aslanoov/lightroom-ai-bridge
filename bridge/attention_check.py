@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Attention-hierarchy gate for publish-readiness - the KB's per-region scan, durable.
 
-Implements the hard gate the KB records as a lesson: before calling
-an edit "publish/IG ready," confirm the region a human would NAME as the subject
+Implements an attention gate: before calling
+an edit "publish-ready," confirm the region a human would NAME as the subject
 wins (or nearly wins) on brightness, and holds saturation/contrast, against every
 other large region. A background element that out-brights the subject is a
-competing-emphasis defect (core/composition.md) - fix by crop, local darken, or
+competing-emphasis defect - fix by crop, local darken, or
 targeted HSL, then re-run.
 
 What it does:
@@ -14,7 +14,7 @@ What it does:
 - Optional --region NAME:L,R,T,B (repeatable) measures named boxes (e.g. the
   subject vs its rivals) for a precise verdict.
 - Optional --squint OUT.jpg writes a ~200px thumbnail - the figure-ground squint
-  test (does the subject still read at feed-scroll size?).
+  test (does the subject still read at thumbnail size?).
 
 Tile letters are rows A.., columns 1.. (A1 = top-left).
 

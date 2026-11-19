@@ -1,9 +1,15 @@
 # Operating the Lightroom bridge (for any agent)
 
+> This file is part of the public project. Keep it generic. Anything about one
+> user (taste, destinations, paths, photo details, session findings about their
+> photos) belongs in `PERSONAL.md` or the knowledge base, never here.
+
 **The full operating cheat-sheet is [`CLAUDE.md`](CLAUDE.md).** It is written for
 Claude Code, but everything in it (the commands, the races, the mask caveats,
 the culling funnel, the knowledge-base loop) applies to any agent driving this
 bridge. Read it. This file only covers what differs when you are not Claude Code.
+If a `PERSONAL.md` exists at the repo root, read it too: it holds your own
+local rules and wins on conflict.
 
 ## The short version
 
@@ -25,10 +31,11 @@ itself what it supports.
    edit, render again, and compare. If your harness cannot show you an image,
    say so plainly rather than editing on faith, and lean on the numeric helpers
    (`bridge/measure_tilt.py`, `bridge/attention_check.py`, `./lrc settings`).
-2. **`ok` is not commit confirmation.** Read back with `value <Param>` after a
-   short settle, and verify visually by render. Three confirmed races are listed
-   in `CLAUDE.md`.
-3. **Verify masks by rendering.** `settings` reports mask values as 0 always.
+2. **`ok` is not final confirmation.** Read back with `value <Param>` after a
+   short settle, and verify visually by render. The races are listed in
+   `CLAUDE.md`.
+3. **Verify masks by rendering.** Read mask values with `value local_*` or the
+   command's response, never from `settings`; coverage only shows in a render.
 4. **Snapshot before multi-step edits.** `snapshot-apply` is the safe rollback;
    chained `undo` can over-rewind past the whole edit.
 5. **Use the knowledge base.** `kb/README.md` is the contract, and it works with
@@ -40,7 +47,7 @@ itself what it supports.
 
 ## If you speak MCP instead of shell
 
-The package ships a stdio MCP server (`lightroom-bridge`) exposing 46 tools in
+The package ships a stdio MCP server (`lightroom-bridge`) exposing 62 tools in
 total, including seven `kb_*` tools for the knowledge base, with previews
 returned as inline images. Setup is in `README.md`. It shares one daemon with
 the CLI, so both can be live at once. Point `LIGHTROOM_BRIDGE_KB` at a `kb/`

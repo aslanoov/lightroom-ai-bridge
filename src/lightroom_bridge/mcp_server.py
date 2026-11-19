@@ -62,15 +62,24 @@ Notes:
 - Edits act on the active (most-selected) photo and switch Lightroom to Develop.
   Batch ops take targets="selected". Everything is non-destructive (Lightroom
   History) and reversible with `undo`.
-- AI masks under-apply on creation: `mask` create, then `mask` adjust to re-push
-  the values, then verify with `render_preview`. Mask read-back is unreliable;
-  trust the render, not `list_masks`.
+- Mask structure/IDs can be read on Lightroom 15.4+. Creation waits for a new
+  mask ID; this does not prove pixel coverage or completed AI computation.
+  Verify effects by rendering; if needed reapply absolute adjustments by mask_id.
+- `capabilities` reports documented SDK support separately from UI-only features.
+- AI status is partial, and preset/update requests are not completion signals.
+  Respect the destination's editing policy: some platforms label AI-edited images.
 - Before a multi-step edit, `create_snapshot` a named restore point; if the edit
   goes wrong, `apply_snapshot` it back. That beats chained `undo`, which can
   over-rewind past the whole edit.
 - For rating/flag/label writeback at scale, prefer `set_metadata` with a uuid:
   it writes directly to that photo and returns the read-back verification.
   `set_rating`/`set_flag`/`set_label` act on the CURRENT SELECTION instead.
+- Geometry delivery: geometry_capture -> geometry_plan -> geometry_apply ->
+  geometry_transfer / manual references -> geometry_audit. Inspect BOTH axes and
+  the annotated after image; absent credible references need explicit reasons.
+  Separate transform from crop with a new capture. Prefer display-space plans
+  to raw crop fractions; UUID/state guards prevent stale or wrong-photo writes.
+  A successful write or texture average never proves straightness.
 - Start a session with `ping` to confirm Lightroom is connected.
 """
 
@@ -97,6 +106,21 @@ def ping() -> dict:
 def status() -> dict:
     """Current module, catalog, and selection summary."""
     return _core.call("status")
+
+
+@mcp.tool(annotations={"title": "Bridge capabilities", **_READ})
+def capabilities() -> dict:
+    """Report Lightroom/plugin/SDK versions, available APIs, and UI-only features.
+    Does not change the module, selection, or photo."""
+    return _core.call("capabilities")
+
+
+@mcp.tool(annotations={"title": "Read native culling selection", **_READ})
+def review_selection() -> dict:
+    """Read explicitly selected photos after native Assisted Culling or Duplicate
+    Detection, with ratings/flags and folder-stack metadata. Does not run native
+    analysis or expose unavailable focus/eye scores. Stacks do not prove duplicates."""
+    return _core.call("review_selection")
 
 
 @mcp.tool(annotations={"title": "List selected photos", **_READ})
@@ -139,8 +163,9 @@ def list_presets() -> dict:
 
 @mcp.tool(annotations={"title": "List masks", **_READ})
 def list_masks() -> dict:
-    """List masks on the active photo. NOTE: Lightroom's read-back is unreliable
-    and often returns []; verify masks with `render_preview` instead."""
+    """List mask structure/IDs and selected ID. Supported structure read-back on
+    Lightroom 15.4+; render to verify pixel coverage and adjustment strength.
+    Read errors are reported explicitly, never converted to an empty list."""
     return _core.call("mask_list")
 
 
@@ -307,7 +332,8 @@ def reset_develop(param: Optional[str] = None) -> dict:
 
 @mcp.tool(annotations={"title": "Select Develop tool", **_EDIT})
 def select_tool(tool: str) -> dict:
-    """Select a Develop tool: loupe, crop, dust, redeye, masking, or upright."""
+    """Select loupe, crop, dust, redeye, masking, upright, point_color,
+    local_point_color, or depth_refinement."""
     return _core.call("select_tool", {"tool": tool})
 
 
@@ -327,19 +353,19 @@ def mask(
     """Masking operations.
 
     operation: create | add | subtract | intersect | adjust | list | reset |
-               invert | delete | select
+               invert | delete | select | duplicate_invert | toggle_hidden
     type (for create/add/subtract/intersect): brush | gradient | radialGradient |
                rangeMask | aiSelection
     subtype (rangeMask/aiSelection only): subject | sky | background | objects |
                people | landscape | color | luminance | depth
     adjustments: local_* params, e.g. {"local_Exposure": -0.5, "local_Clarity": 10}
-    (applied to the current mask; also accepted by add/subtract/intersect)
+    (applied to the current mask; adjust accepts mask_id for an explicit target)
 
     "reset" DELETES ALL masks on the photo; "delete" removes one by `mask_id`.
-    IMPORTANT: AI masks under-apply on creation. Reliable pattern is
-    operation="create" then operation="adjust" to re-push `adjustments`, then
-    verify with `render_preview`. You CANNOT position geometric masks at chosen
-    coordinates (Lightroom limitation); they land at the default spot.
+    Creation waits for a new mask ID, but AI computation can continue. Verify
+    with render_preview and reapply adjustments by mask_id if needed.
+    toggle_hidden toggles visibility once; do not blindly retry after a timeout.
+    The documented SDK 15.3 creation API provides no geometric coordinates.
     """
     op = operation
     if op in ("create", "add", "subtract", "intersect"):
@@ -354,18 +380,120 @@ def mask(
     if op == "adjust":
         if not adjustments:
             return {"ok": False, "error": "operation 'adjust' requires `adjustments`"}
-        return _core.call("mask_adjust", {"values": dict(adjustments)})
+        params = {"values": dict(adjustments)}
+        if mask_id:
+            params["id"] = mask_id
+        return _core.call("mask_adjust", params)
     if op == "list":
         return _core.call("mask_list")
     if op == "reset":
         return _core.call("mask_reset")
     if op == "invert":
         return _core.call("mask_invert", {"id": mask_id} if mask_id else {})
+    if op in ("duplicate_invert", "toggle_hidden"):
+        return _core.call("mask_" + op, {"id": mask_id} if mask_id else {})
     if op in ("delete", "select"):
         if not mask_id:
             return {"ok": False, "error": "operation %r requires `mask_id`" % op}
         return _core.call("mask_" + op, {"id": mask_id})
     return {"ok": False, "error": "unknown mask operation: %r" % op}
+
+
+@mcp.tool(annotations={"title": "Point Color", **_DESTROY})
+def point_color(
+    operation: Literal["list", "add", "update", "select", "delete", "clear"] = "list",
+    swatch: Optional[dict] = None,
+    index: Optional[int] = None,
+    is_local: bool = False,
+    mask_id: Optional[str] = None,
+) -> dict:
+    """Global/per-mask Point Color. add requires SrcHue (0..6), SrcSat and
+    SrcLum (0..1). Optional HueShift/SatScale/LumScale/Variance are -1..1;
+    RangeAmount is 0..1. HueRange/SatRange/LumRange contain ordered 0..1 limits:
+    LowerNone, LowerFull, UpperFull, UpperNone. update merges provided fields
+    into the selected or indexed swatch. Indices are 1..8. is_local=true uses
+    the current mask or mask_id. clear removes all swatches in that scope.
+    Returns SDK read-back; render to verify the effect."""
+    params: dict = {"operation": operation, "isLocal": is_local}
+    if swatch is not None:
+        params["swatch"] = dict(swatch)
+    if index is not None:
+        params["index"] = index
+    if mask_id:
+        params["maskId"] = mask_id
+    return _core.call("point_color", params)
+
+
+@mcp.tool(annotations={"title": "Edit a mask component", **_DESTROY})
+def mask_tool(
+    operation: Literal["select", "delete", "toggle_hidden", "invert"],
+    tool_id: str,
+    mask_id: Optional[str] = None,
+) -> dict:
+    """Operate on a component ID from list_masks. Requires membership in the
+    selected/explicit parent mask. Toggles must not be retried blindly."""
+    params = {"operation": operation, "toolId": tool_id}
+    if mask_id:
+        params["maskId"] = mask_id
+    return _core.call("mask_tool", params)
+
+
+@mcp.tool(annotations={"title": "Delete empty masks", **_DESTROY})
+def delete_empty_masks(targets: Literal["active", "selected"] = "active") -> dict:
+    """Ask Lightroom to delete empty masks from the active or explicitly selected
+    photos. Create snapshots first. Does not report a guessed deleted-mask count."""
+    return _core.call("mask_delete_empty", {"targets": targets})
+
+
+@mcp.tool(annotations={"title": "Read partial AI edit status", **_READ})
+def ai_state() -> dict:
+    """Read Enhance, Reflection Removal and known-filter status for the active
+    photo. Partial SDK coverage, not a universal AI-free/completion test."""
+    return _core.call("ai_state")
+
+
+@mcp.tool(annotations={"title": "Update AI settings", **_EDIT})
+def update_ai_settings(targets: Literal["active", "selected"] = "active") -> dict:
+    """Request recomputation of AI settings. May continue in the background;
+    inspect Lightroom AI Edit Status and render before using the result.
+    Respect channel restrictions on AI processing."""
+    return _core.call("update_ai_settings", {"targets": targets})
+
+
+@mcp.tool(annotations={"title": "Enhance photo", **_EDIT})
+def enhance(
+    feature: Literal["denoise", "rawDetails", "superRes"] = "denoise",
+    enable: bool = True,
+    amount: float = 50,
+) -> dict:
+    """Set AI Denoise, Raw Details or Super Resolution explicitly. Checks photo
+    availability and returns panel state, not GPU-completion confirmation.
+    amount (1..100) is for Denoise. Skip it when the destination labels AI edits."""
+    return _core.call("enhance", {"feature": feature, "enable": enable, "amount": amount})
+
+
+@mcp.tool(annotations={"title": "Reflection Removal status", **_READ})
+def reflection_state() -> dict:
+    """Read Reflection Removal availability, enabled state, amount and quality."""
+    return _core.call("reflection_state")
+
+
+@mcp.tool(annotations={"title": "Reflection Removal", **_EDIT})
+def reflection_removal(
+    enable: bool = True,
+    amount: Optional[float] = None,
+    quality: Optional[Literal["preview", "standard", "best"]] = None,
+    timeout: float = 90,
+) -> dict:
+    """Set Reflection Removal; amount -100..100, timeout 1..600 seconds.
+    Waits for its SDK callback where applicable; timedOut=true means pending,
+    not success. Render to verify. Skip it when the destination labels AI edits."""
+    params: dict = {"enable": enable, "timeout": timeout}
+    if amount is not None:
+        params["amount"] = amount
+    if quality:
+        params["quality"] = quality
+    return _core.call("reflection_removal", params)
 
 
 # --------------------------------------------------------------------------- #
@@ -377,13 +505,17 @@ def apply_preset(
     name: Optional[str] = None,
     uuid: Optional[str] = None,
     targets: Literal["active", "selected"] = "active",
+    amount: int = 100,
+    update_ai: bool = False,
 ) -> dict:
     """Apply a Develop preset by `name` (case-insensitive, first match across
     folders) or exactly by preset `uuid` (from `list_presets` - unambiguous
-    when names collide). `targets`: "active" or "selected"."""
+    when names collide). amount: 0..200, where supported by the preset.
+    update_ai requests AI recomputation after applying; opt-in, subject to
+    channel policy. The response is not background-AI completion confirmation."""
     if not name and not uuid:
         return {"ok": False, "error": "give a preset name or uuid (see list_presets)"}
-    params: dict = {"targets": targets}
+    params: dict = {"targets": targets, "amount": amount, "updateAISettings": update_ai}
     if name:
         params["name"] = name
     if uuid:
@@ -739,6 +871,85 @@ def daemon_status() -> dict:
 def main() -> None:
     """Console-script entry point: run the MCP server over stdio."""
     mcp.run()
+
+
+
+
+# Geometry uses the same implementation as the CLI; imports are lazy so ordinary
+# bridge tools work without the optional computer-vision dependencies.
+@mcp.tool(annotations={"title": "Capture geometry evidence", **_READ})
+def geometry_capture(uuid: str, out_dir: str, size: int = 2560) -> dict:
+    """Save photo UUID, full Develop state and unique render together. Use a NEW
+    output directory. Returns capture path and reference template. Look at render.
+    Needs plug-in 1.4+ and the geometry package extra."""
+    from . import geometry
+    return geometry.run('capture', uuid=uuid, out_dir=out_dir, size=size)
+
+
+@mcp.tool(annotations={"title": "Plan display-space geometry", **_READ})
+def geometry_plan(capture_path: str, out: str, reason: str,
+                  controls: Optional[dict[str, float]] = None,
+                  box: Optional[list[float]] = None, ratio: Optional[float] = None,
+                  anchor: Optional[list[float]] = None,
+                  protected: Optional[list[dict[str, Any]]] = None) -> dict:
+    """Create a reviewable plan, no Lightroom writes. controls are absolute display
+    angle (clockwise), vertical, horizontal. OR trim CURRENT RENDER with box
+    [left,top,right,bottom], optional width/height ratio and anchor [x,y]. Never
+    combine transform and trim: capture a new render between them. Protected
+    feature entries: label, point=[x,y], margin=.02. Fractions are DISPLAY space.
+    Checks sensor crop math against actual native dimensions; fails closed on
+    unsupported states. Keep reason specific to the visible problem."""
+    from . import geometry
+    return geometry.run('plan', capture_path=capture_path, out=out, reason=reason,
+                        controls=controls, box=box, ratio=ratio, anchor=anchor or [.5,.5], protected=protected)
+
+
+@mcp.tool(annotations={"title": "Apply guarded geometry plan", **_EDIT})
+def geometry_apply(plan_path: str, out_dir: str) -> dict:
+    """Apply to captured UUID only if catalog and FULL Develop state still match.
+    Creates rollback snapshot and persistent receipt before editing, checks
+    readback and unchanged tone/masks, exports native after image and checks crop
+    dimensions. Never automatically retries a write. On error inspect receipt
+    and snapshot first. Successful response still requires geometry_audit and
+    visual comparison. out_dir must be new."""
+    from . import geometry
+    return geometry.run('apply', plan_path=plan_path, out_dir=out_dir)
+
+
+@mcp.tool(annotations={"title": "Audit named horizontal and vertical references", **_READ})
+def geometry_audit(capture_path: str, references: str, out: str,
+                   review: Optional[dict[str, Any]] = None) -> dict:
+    """Measure named lines bound to this exact render hash, save JSON and overlay.
+    References JSON: image_size, image_sha256, references [{label,axis,reason,
+    points:[[x,y],...]}], unavailable {axis:reason}. Angles use physical pixels.
+    Reports residual, span and placement uncertainty, never automatic level
+    certification. Read overlay and full image. Optional review must explicitly
+    check reference placement, proportions, borders, composition, and provide
+    decision accept/revise/unverifiable plus reason. Missing axes cannot pass."""
+    from . import geometry
+    return geometry.run('audit', capture_path=capture_path, references=references, out=out, review=review)
+
+
+@mcp.tool(annotations={"title": "Relocate geometry references after transform", **_READ})
+def geometry_transfer(source_capture: str, target_capture: str, references: str, out: str) -> dict:
+    """Match SAME PHOTO's features and relocate references after geometry only.
+    Rejects stale images, changed tone/lens/masks, sparse/clustered matching,
+    unsupported reference regions and lines outside crop. Output is provisional:
+    inspect target overlay on actual edges. Manually re-mark if rejected."""
+    from . import geometry
+    return geometry.run('transfer', source_capture=source_capture, target_capture=target_capture,
+                        references=references, out=out)
+
+
+@mcp.tool(annotations={"title": "Suggest a bounded geometry correction", **_READ})
+def geometry_suggest(base_audit: str, probe_audits: list[str], out: str) -> dict:
+    """Estimate local response from separate ONE-CONTROL probes of the SAME
+    baseline and SAME named lines. Rejects rank deficiency, poor conditioning
+    and sub-uncertainty residuals. Proposes at most 1 degree / 15 perspective
+    units per iteration. No writes, no extrapolated one-shot solution. Restore
+    baseline, plan proposal, apply, transfer/re-mark and re-audit actual output."""
+    from . import geometry
+    return geometry.run('suggest', base_audit=base_audit, probe_audits=probe_audits, out=out)
 
 
 if __name__ == "__main__":

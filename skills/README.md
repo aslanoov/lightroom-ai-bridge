@@ -40,3 +40,5 @@ These files are meant to be edited. They are your operating manual for the
 agent: if Claude keeps making the same mistake, the fix usually belongs in the
 skill (a rule that applies every session) or in `kb/` (photographic judgment
 that grows with your work). Keep tool mechanics in the skill and taste in the KB.
+Rules about you personally (destinations, house style, paths) go to `PERSONAL.md`
+at the repo root, so the skills stay shareable.

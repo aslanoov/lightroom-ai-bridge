@@ -30,6 +30,8 @@ dependencies = ["fastmcp>=2.11,<4"]
 [project.optional-dependencies]
 # Lua 5.1 runtime for the plug-in protocol tests (tests/).
 test = ["lupa>=2.0,<3"]
+# Image analysis for the geometry tools (geometry_* MCP tools, `lrc geometry`).
+geometry = ["numpy>=1.24,<3", "Pillow>=10,<13", "scikit-image>=0.22,<1"]
 
 [project.scripts]
 lrc = "lightroom_bridge.cli:main"

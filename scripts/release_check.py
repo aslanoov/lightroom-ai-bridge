@@ -12,7 +12,7 @@ Checks, all against git-tracked files:
 3. The knowledge base ships EMPTY: kb/ holds only README.md, INDEX.md,
    learned/TEMPLATE.md and .gitkeep files, and `kb.py validate` passes.
 4. No personal data: no absolute home-directory paths in tracked files.
-5. No em-dashes or en-dashes in tracked text (house writing rule).
+5. No em-dashes or en-dashes in tracked text (style rule).
 6. Every relative Markdown link resolves.
 7. The working tree is clean (everything that ships is committed).
 

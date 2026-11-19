@@ -47,3 +47,8 @@ knowledge/processed/*
 # kb/**/*.md
 # !kb/README.md
 # !kb/learned/TEMPLATE.md
+
+# --- Your personal overlay ---
+# PERSONAL.md holds your own rules (paths, destinations, taste notes) and is
+# read by CLAUDE.md / AGENTS.md. Keep it out of any public remote.
+PERSONAL.md

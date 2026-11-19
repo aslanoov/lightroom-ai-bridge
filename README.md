@@ -7,9 +7,10 @@ Includes a Lightroom plug-in, a command-line interface and optional Claude Code
 skills. Requires Lightroom Classic 15.3+; cloud Lightroom is not supported.
 
 This drives Lightroom's actual
-Develop module: exposure, white balance, tone, color grading, HSL, crop and
-straighten, AI masks (select sky, select subject), presets, ratings and flags,
-snapshots, undo. Every change is a normal, non-destructive Develop step that
+Develop module: exposure, white balance, tone, color grading, HSL, Point Color,
+crop and straighten with a measured geometry workflow, AI masks (select sky,
+select subject), presets with strength, ratings and flags, snapshots, undo.
+Every change is a normal, non-destructive Develop step that
 shows up in your History panel as "Claude: ...", on your own RAW files, in your
 own catalog. Your originals are never touched.
 
@@ -50,20 +51,23 @@ For the client configuration, jump to [Lightroom MCP setup](#lightroom-mcp-setup
 
 | Piece | What it is |
 |---|---|
-| MCP server (`lightroom-bridge`) | 46 tools, including seven knowledge-base tools, for stdio MCP clients. Rendered previews are returned as inline images. |
+| MCP server (`lightroom-bridge`) | 62 tools, including seven knowledge-base tools and six geometry tools, for stdio MCP clients. Rendered previews are returned as inline images. |
 | `ClaudeBridge.lrplugin/` | The Lightroom plug-in. Install it once into Lightroom. |
-| `lrc` CLI | 40+ commands: tone, WB, crop, masks, presets, ratings, snapshots, render. Pure Python 3 stdlib. |
+| `lrc` CLI | 40+ commands: tone, WB, Point Color, crop and geometry, masks, presets, Enhance, ratings, snapshots, render. Pure Python 3 stdlib (the geometry commands use an optional extra). |
 | `skills/` | Two Claude Code skills: `/lightroom-bridge` (everyday editing and culling) and `/lightroom-bridge-pro` (a full professional edit of the selected shot, zero questions). |
 | `kb/` | A self-improving knowledge base of photographic judgment. **Ships empty on purpose.** It fills with *your* taste as you work. |
-| `bridge/` | Durable helper scripts: contact-sheet review, the two-stage culling funnel, verified batch apply, tilt measurement, attention-hierarchy check. |
+| `bridge/` | Durable helper scripts: contact-sheet review, the two-stage culling funnel, verified batch apply, named-reference geometry measurement, attention-hierarchy check. |
 
-**Requirements:** macOS and Adobe Lightroom Classic **15.3 or newer**. The `lrc`
-CLI needs only **Python 3** (already on macOS, no third-party packages). The MCP
-server additionally needs `fastmcp` and Python **3.10+**, both provisioned
-automatically by `uv run` in the source-checkout setup below. Pillow
-(`pip3 install --user Pillow`) is needed only for
-the contact-sheet helpers. macOS only: the bridge uses a Unix domain socket and
-`~/Library` paths; Windows and Linux are untested.
+**Requirements:** macOS and Adobe Lightroom Classic **15.3 or newer** (the
+plug-in declares 15.3 as its minimum). The `lrc` CLI needs only **Python 3**
+(already on macOS, no third-party packages). The MCP server additionally needs
+`fastmcp` and Python **3.10+**, both provisioned automatically by `uv run` in
+the source-checkout setup below. Pillow (`pip3 install --user Pillow`) is
+needed only for the contact-sheet helpers. The geometry workflow needs the
+optional `geometry` extra (numpy, Pillow, scikit-image):
+`uv pip install -e '.[geometry]'`, or add `--extra geometry` to `uv run`.
+macOS only: the bridge uses a Unix domain socket and `~/Library` paths; Windows
+and Linux are untested.
 
 ---
 
@@ -125,9 +129,13 @@ reconnect the client, then ask it to "ping Lightroom". Use an image-capable
 client for the look, edit, look workflow.
 
 Install from source for now; the package is not yet published to PyPI. The
-server exposes **46 tools in total, including seven `kb_*` tools**, with
-before/after previews returned as inline images. It shares one daemon with the
-CLI, so both can be used in the same session.
+server exposes **62 tools in total, including seven `kb_*` tools and six
+`geometry_*` tools**, with before/after previews returned as inline images. It
+shares one daemon with the CLI, so both can be used in the same session. The
+`geometry_*` tools need the optional extra: add `"--extra", "geometry"` after
+`"run"` in the args above (or `--extra geometry` in the Claude Code line).
+After updating the repo, reload the plug-in and reconnect the client so it
+discovers new tools.
 
 **B. Claude Code with skills.**
 
@@ -153,11 +161,20 @@ on your `PATH`.
 ./lrc wb --temp 5400 --tint 8
 ./lrc crop --left 0.05 --top 0 --right 0.95 --bottom 1 --angle -1.5
 ./lrc mask create aiSelection sky local_Exposure=-0.5 local_Temperature=-6
-./lrc mask adjust local_Clarity=12               # AI masks need the re-push
+./lrc mask adjust local_Clarity=12               # targets the new mask; --id for any other
 
 ./lrc render --out /tmp/after.jpg --size 1500    # look again
 ./lrc undo                                       # or snapshot-apply to roll back
 ```
+
+Beyond the sliders: global and per-mask **Point Color** (`point-color`),
+preset strength (`preset apply --amount`), explicit Enhance and Reflection
+Removal requests, a capabilities report (`capabilities`), the selection you
+made with Lightroom's own Assisted Culling or Duplicates view
+(`review-selection`, `bridge/cull.py triage --native-selection`), and a
+state-bound **geometry workflow** (`geometry capture/plan/apply/audit`) that
+measures named horizontal and vertical references instead of trusting a slider
+read-back. Geometry walkthrough: [bridge/geometry-audit.md](bridge/geometry-audit.md).
 
 Full command reference: [docs/COMMAND-REFERENCE.md](docs/COMMAND-REFERENCE.md).
 Run `./lrc <command> -h` for any command's flags, or `./lrc help` to ask the
@@ -206,7 +223,10 @@ For rating hundreds or thousands of frames there is a two-stage funnel in
 
 Input resolution matters more than the model, and comparisons beat absolute star
 numbers. For the purely technical cull (focus, blinks, duplicates), Lightroom's
-own Assisted Culling is better than any LLM at any resolution. Details in
+own Assisted Culling is better than any LLM at any resolution. Run it first,
+select its results in Lightroom, and `python3 bridge/cull.py triage
+--native-selection` feeds that selection into the funnel with ratings, flags
+and stack membership preserved. Details in
 [docs/USER-GUIDE.md](docs/USER-GUIDE.md#culling-a-shoot).
 
 ---
@@ -222,13 +242,17 @@ kb/                      knowledge base scaffold (empty; fills with your taste)
 knowledge/               inbox for raw reference material you want ingested
 docs/                    user guide, command reference, release runbook
 scripts/                 release_check.py, the pre-release gate
-tests/                   protocol and transport tests (no Lightroom needed)
+tests/                   protocol, transport, plug-in and geometry tests (no Lightroom needed)
 CLAUDE.md / AGENTS.md    the operating cheat-sheet an agent reads (Claude / other agents)
 ```
 
-Run the tests with `uv run --extra test python -m unittest discover -s tests`
-(they load the plug-in's Lua in a Lua 5.1 runtime and talk to a fake plug-in
-over real sockets; Lightroom is not needed).
+Run the tests with
+`uv run --extra test --extra geometry python -m unittest discover -s tests`
+(they load the plug-in's Lua in a Lua 5.1 runtime with SDK doubles, talk to a
+fake plug-in over real sockets, and check the geometry math on synthetic
+images; Lightroom is not needed). The `tests/live_*.py` scripts are opt-in
+integration runs against a virtual copy you name explicitly; `unittest
+discover` does not pick them up.
 
 **Not included:** Adobe's Lightroom Classic SDK and its PDF guides. They are
 Adobe's material with redistribution restrictions, and they are not required at
@@ -257,8 +281,16 @@ active photo.
 
 **Edits do not seem to apply.** The plug-in switches to the Develop module for
 slider and mask edits. Watch the History panel: each edit is logged as
-"Claude: ...". Note that the very first edit call issued while the photo sits in
-Library is eaten by that module switch; re-issue it.
+"Claude: ...". The plug-in waits for Develop to be ready and reads back
+absolute slider values, retrying within a bounded window, so the old
+"first edit from Library is lost" problem is handled for absolute values.
+Relative nudges (`+`, `-`) and toggles are never replayed automatically; if one
+did not land, re-issue it yourself.
+
+**A new command or MCP tool is missing after updating.** Reload the plug-in
+(Plug-in Manager, then Reload Plug-in), run `./lrc daemon stop`, and reconnect
+or restart your MCP client so it re-reads the tool list. `./lrc ping` should
+then report plug-in 1.5.0 or newer.
 
 **A preview looks stale, or `thumb` errors.** Use `render`, which is a
 guaranteed fresh export that reflects every edit. `thumb` relies on Lightroom's
@@ -313,7 +345,7 @@ Logs: `~/.claude-lrc-bridge/daemon.log` (bridge side) and the in-Lightroom
 ## Status
 
 Tested end-to-end against Adobe Lightroom Classic **15.3 and 15.4** on macOS
-with Sony `.ARW` RAW files; release 2.0.0 (protocol, token, reconnects and the
+with `.ARW` RAW files; release 2.0.0 (protocol, token, reconnects and the
 release smoke test) was verified against **15.6**. Confirmed working: `ping`, `status`, `settings`,
 `list-selected`, `help`, `set`, `value`, `range`, `apply`, `wb`, `auto-tone`,
 `auto-wb`, `crop`, `crop-reset`, masking (create plus local adjustments,
@@ -321,11 +353,21 @@ visibly applied), `reset`, `render` before/after, `preset list` / `apply` /
 `save`, `snapshot` and `snapshot-apply`, module switch, `undo` / `redo`, and
 `rating` / `flag` / `label` including verified per-UUID writeback.
 
+Release 2.1.0 (plug-in 1.5.0) was live-checked on Lightroom
+Classic **15.6** on a disposable JPEG virtual copy: global and per-mask Point
+Color, verified mask creation, duplicate-invert, mask components, visibility,
+empty-mask cleanup, preset strength, AI update requests, AI state and native
+selection triage. Not covered by that check: the visual result of Reflection
+Removal (its first enabled export timed out) and Enhance on supported RAW
+files. See [CHANGELOG.md](CHANGELOG.md) for every change and known limitation.
+
 Two behaviors are handled automatically and worth knowing: `thumb` is
 intermittent for the active photo in Develop and silently falls back to
-`render`; and mask *values* cannot be read back (`settings` reports them as 0),
-so masks are verified by rendering. The full list of verified quirks lives in
-[CLAUDE.md](CLAUDE.md), which is also what an agent reads before it starts.
+`render`; and `settings` does not report mask values reliably (0 on 15.3, an
+internal scale on 15.6), so read a mask value with `value local_*` or the
+create/adjust response and verify its coverage by rendering. The full list of
+verified quirks lives in [CLAUDE.md](CLAUDE.md), which is also what an agent
+reads before it starts.
 
 ## Get help
 
